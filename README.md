@@ -62,32 +62,50 @@ This assumes no prior experience with Telegram bots or GitHub Actions.
    `123456789:AAExampleTokenHere`. Save it -- this is your
    `TELEGRAM_BOT_TOKEN`.
 
-### 2. Create (or choose) a Telegram channel and add the bot as admin
+### 2. Add the bot to the channel(s) or group(s) where it should post
 
-1. Create a Telegram channel (or use an existing one) where results should
-   be posted. You can repeat this for more than one channel -- see below.
-2. Open the channel's settings → **Administrators** → **Add Admin**, and
-   add your bot. It needs permission to post messages.
-3. Figure out your `TELEGRAM_CHANNEL_ID`:
-   - If the channel is public, it's just its `@username` (e.g.
-     `@celta_results`).
-   - If the channel is private, it's a numeric id, usually a large negative
-     number like `-1001234567890`. One way to get it: post any message in
-     the channel, then visit
-     `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and
-     look for `"chat":{"id": ...}` in the response.
+This bot can post to Telegram **channels** and **groups** (including
+supergroups) -- `TELEGRAM_CHANNEL_ID` can hold any mix of them. The setup is
+slightly different for each:
 
-**Posting to more than one channel:** add the bot as admin to each channel,
-then set `TELEGRAM_CHANNEL_ID` to a comma-separated list, e.g.:
+**Channels:** the bot must be added as an **admin** with permission to post
+messages -- Telegram enforces this for channels no matter what.
+
+1. Open the channel's settings → **Administrators** → **Add Admin**, and
+   add your bot.
+2. Figure out its id:
+   - Public channel: its `@username` (e.g. `@celta_results`).
+   - Private channel: a numeric id, usually a large negative number like
+     `-1001234567890`. Get it by posting any message in the channel, then
+     visiting `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a
+     browser and looking for `"chat":{"id": ...}` in the response.
+
+**Groups:** just add the bot as a normal **member** -- admin rights are
+*not* required (unlike channels), unless the group's permissions
+specifically restrict regular members from sending messages, in which case
+the bot needs the same send-messages exemption an admin would have.
+
+1. Add the bot to the group like you would any other member.
+2. Get its chat id the same way as a private channel: send any message in
+   the group, then check `getUpdates` as above. It'll be a negative number.
+   - ⚠️ If a "basic" group later gets converted to a **supergroup**
+     (Telegram does this automatically once a group grows or certain
+     features get enabled), its id changes to a new `-100...` one. If
+     posting suddenly starts failing with "chat not found" for a group that
+     used to work, this is the first thing to check -- re-fetch the id via
+     `getUpdates` and update the secret.
+
+**Posting to more than one channel/group:** once each one has the bot added
+(as admin for channels, as a member for groups), set `TELEGRAM_CHANNEL_ID` to
+a comma-separated list mixing either kind freely, e.g.:
 
 ```
-TELEGRAM_CHANNEL_ID=@celta_results,-1001234567890
+TELEGRAM_CHANNEL_ID=@celta_results,-1001234567890,-4009876543
 ```
 
-The bot posts the same message to every channel in the list. If one channel
-fails (e.g. the bot was removed as admin there) the others still get the
-message -- check the workflow logs for a warning naming which channel(s)
-failed.
+The bot posts the same message to every entry in the list. If one fails
+(e.g. the bot was removed as admin/member there) the others still get the
+message -- check the workflow logs for a warning naming which one(s) failed.
 
 ### 3. Get a football-data.org API key
 
@@ -234,7 +252,9 @@ real using live data.
 - **"required environment variable ... is not set":** a secret is missing
   or misspelled in your repository settings.
 - **Telegram API errors (e.g. "chat not found" or "not enough rights"):**
-  double-check `TELEGRAM_CHANNEL_ID` and that the bot is an admin of the
-  channel with permission to post messages.
+  double-check `TELEGRAM_CHANNEL_ID`, and that the bot is an admin (for a
+  channel) or at least a member (for a group) with permission to post
+  messages. For groups, also check whether the id changed because the group
+  was upgraded to a supergroup (see step 2 above).
 - **football-data.org returns an error:** double-check
   `FOOTBALL_DATA_API_KEY` and `CELTA_TEAM_ID`.
