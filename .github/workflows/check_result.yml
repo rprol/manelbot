@@ -1,0 +1,44 @@
+name: Check Celta de Vigo result
+
+# Runs automatically every 20 minutes, and can also be triggered manually
+# from the "Actions" tab in GitHub (useful for testing).
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+# The job needs permission to push the updated state.json file back to
+# this repo using the automatically-provided GITHUB_TOKEN.
+permissions:
+  contents: write
+
+jobs:
+  check-result:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run result checker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          CELTA_TEAM_ID: ${{ secrets.CELTA_TEAM_ID }}
+        run: python main.py
+
+      - name: Commit updated state file (if it changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "Update state after checking match result"
+          git push
