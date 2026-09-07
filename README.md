@@ -65,7 +65,7 @@ This assumes no prior experience with Telegram bots or GitHub Actions.
 ### 2. Create (or choose) a Telegram channel and add the bot as admin
 
 1. Create a Telegram channel (or use an existing one) where results should
-   be posted.
+   be posted. You can repeat this for more than one channel -- see below.
 2. Open the channel's settings → **Administrators** → **Add Admin**, and
    add your bot. It needs permission to post messages.
 3. Figure out your `TELEGRAM_CHANNEL_ID`:
@@ -76,6 +76,18 @@ This assumes no prior experience with Telegram bots or GitHub Actions.
      the channel, then visit
      `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and
      look for `"chat":{"id": ...}` in the response.
+
+**Posting to more than one channel:** add the bot as admin to each channel,
+then set `TELEGRAM_CHANNEL_ID` to a comma-separated list, e.g.:
+
+```
+TELEGRAM_CHANNEL_ID=@celta_results,-1001234567890
+```
+
+The bot posts the same message to every channel in the list. If one channel
+fails (e.g. the bot was removed as admin there) the others still get the
+message -- check the workflow logs for a warning naming which channel(s)
+failed.
 
 ### 3. Get a football-data.org API key
 

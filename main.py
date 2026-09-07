@@ -217,6 +217,17 @@ def build_message(match, team_id):
 # Telegram
 # ---------------------------------------------------------------------------
 
+def parse_channel_ids(raw_channel_ids):
+    """
+    TELEGRAM_CHANNEL_ID can hold a single channel (e.g. "@my_channel") or
+    several, separated by commas (e.g. "@channel_one,-1001234567890"), so
+    the same result can be posted to more than one channel/group. This
+    splits that string into a clean list, ignoring extra whitespace and
+    empty entries.
+    """
+    return [c.strip() for c in raw_channel_ids.split(",") if c.strip()]
+
+
 def send_telegram_message(bot_token, channel_id, text):
     """
     Post a message to the configured Telegram channel using the Bot API.
@@ -248,7 +259,7 @@ def send_telegram_message(bot_token, channel_id, text):
 def main():
     # 1. Load required configuration from environment variables / secrets.
     telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
-    telegram_channel_id = get_required_env("TELEGRAM_CHANNEL_ID")
+    telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
     football_api_key = get_required_env("FOOTBALL_DATA_API_KEY")
     # CELTA_TEAM_ID is not a secret, just a config value, so it's fine to
     # fall back to a default instead of requiring it to be set. We use
@@ -292,18 +303,38 @@ def main():
         print("Latest finished match has already been posted. Nothing to do.")
         return
 
-    # 6. We have a new result! Build the message and post it.
+    # 6. We have a new result! Build the message and post it to every
+    #    configured channel. We try all of them even if one fails, so a
+    #    single broken channel doesn't stop the others from getting posted.
     message = build_message(latest_match, celta_team_id)
     print(f"Posting new result: {message}")
 
-    sent_ok = send_telegram_message(telegram_token, telegram_channel_id, message)
-    if not sent_ok:
-        # Don't update state if the message failed to send -- we want to
-        # retry posting this same result on the next scheduled run.
-        print("Failed to send Telegram message. Will retry next run.")
+    successes = 0
+    for channel_id in telegram_channel_ids:
+        if send_telegram_message(telegram_token, channel_id, message):
+            successes += 1
+        else:
+            print(f"Failed to send to channel '{channel_id}'.")
+
+    if successes == 0:
+        # Every channel failed -- don't update state, so we retry posting
+        # this same result (to all channels) on the next scheduled run.
+        print("Failed to send to any channel. Will retry next run.")
         sys.exit(1)
 
-    # 7. Success! Remember this match so we don't post it again.
+    if successes < len(telegram_channel_ids):
+        # Partial failure: at least one channel got the message. We still
+        # mark this match as processed so working channels don't get the
+        # same result posted again next run -- but the failing channel(s)
+        # will miss this result until you fix the underlying issue (e.g.
+        # bot removed as admin, wrong channel id).
+        print(
+            f"WARNING: only {successes}/{len(telegram_channel_ids)} channels "
+            "received this message. Check the errors above."
+        )
+
+    # 7. Success (at least partially)! Remember this match so we don't post
+    #    it again to the channels that already received it.
     save_state({"last_processed_match_id": latest_match_id})
     print("Done.")
 
