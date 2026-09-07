@@ -57,9 +57,6 @@ DEFAULT_CELTA_TEAM_ID = "558"
 # margin in case the API's "most recent" ordering ever surprises us.
 MATCH_FETCH_LIMIT = 5
 
-# Emojis used in the posted message (Celta's colours: sky blue and white).
-CELTA_EMOJIS = "🔵⚪"
-
 # How long to wait for network calls before giving up, in seconds.
 REQUEST_TIMEOUT = 15
 
@@ -190,7 +187,7 @@ def determine_outcome(match, team_id):
 def build_message(match, team_id):
     """
     Build the full text we're going to post to Telegram, e.g.:
-    "Ben, Celta, ben! Partido gañado con mérito! 🔵⚪ Celta 2-1 Getafe"
+    "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -210,7 +207,7 @@ def build_message(match, team_id):
     outcome = determine_outcome(match, team_id)
     phrase = get_random_phrase(outcome)
 
-    return f"{phrase} {CELTA_EMOJIS} Celta {celta_score}-{opponent_score} {opponent_name}"
+    return f"{phrase} Celta {celta_score}-{opponent_score} {opponent_name}"
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ phrases is just editing text.
      random Galician phrase for that outcome from `phrases.py`, and posts a
      message like:
 
-     > Ben, Celta, ben! Partido gañado con mérito! 🔵⚪ Celta 2-1 Getafe
+     > Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe
 
 4. `state.json` is updated with the new match id, and the GitHub Actions
    workflow commits that change back to the repo, so the next scheduled run

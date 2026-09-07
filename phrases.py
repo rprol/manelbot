@@ -22,26 +22,28 @@ WIN_PHRASES = [
     "Ben, Celta, ben! Que xogada, que equipo!",
 ]
 
-# Phrases used when the match ends in a DRAW.
+# Phrases used when the match ends in a DRAW. Tone is deliberately flat and
+# unenthusiastic -- a draw is not something to celebrate.
 # Every phrase starts with the same fixed opener: "Regular, Celta, regular!"
 DRAW_PHRASES = [
-    "Regular, Celta, regular! Un puntiño que tamén suma!",
-    "Regular, Celta, regular! O corazón celeste non se rende!",
-    "Regular, Celta, regular! Non se gañou, pero tampouco se perdeu!",
-    "Regular, Celta, regular! Reparto de puntos hoxe!",
-    "Regular, Celta, regular! Empate xusto, seguimos loitando!",
-    "Regular, Celta, regular! Un punto máis na maleta!",
+    "Regular, Celta, regular! Un empate que sabe a pouco.",
+    "Regular, Celta, regular! Nin se gaña nin se perde, e iso pesa.",
+    "Regular, Celta, regular! Puntos que non acaban de convencer.",
+    "Regular, Celta, regular! Outra tarde sen brillo en Balaídos.",
+    "Regular, Celta, regular! Un punto que sabe amargo.",
+    "Regular, Celta, regular! Faltou algo máis para gañar.",
 ]
 
-# Phrases used when Celta LOSES the match.
+# Phrases used when Celta LOSES the match. Tone is deliberately dramatic and
+# pessimistic.
 # Every phrase starts with the same fixed opener: "Mal, Celta, mal!"
 LOSS_PHRASES = [
-    "Mal, Celta, mal! Pero o Celta séguese en pé!",
-    "Mal, Celta, mal! A afección segue firme co equipo!",
-    "Mal, Celta, mal! Toca levantarse, a próxima será mellor!",
-    "Mal, Celta, mal! Pero seguimos crendo no equipo!",
-    "Mal, Celta, mal! O celtismo nunca se rende!",
-    "Mal, Celta, mal! Pero o Celta segue sendo o noso!",
+    "Mal, Celta, mal! Unha noite negra para os celestes.",
+    "Mal, Celta, mal! Balaídos queda en silencio, mágoa profunda.",
+    "Mal, Celta, mal! Derrota dura que doe no fondo da alma celeste.",
+    "Mal, Celta, mal! Outro golpe que custa dixerir.",
+    "Mal, Celta, mal! A tristeza invade o celtismo hoxe.",
+    "Mal, Celta, mal! Unha tarde para esquecer canto antes.",
 ]
 
 # All phrase banks in one place, keyed by outcome. main.py looks up the
