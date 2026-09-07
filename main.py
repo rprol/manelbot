@@ -188,6 +188,11 @@ def build_message(match, team_id):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
+
+    Teams are always shown in actual home-away order (Celta first when
+    playing at home, second when playing away) so the score reads the
+    same way it would on a scoreboard -- e.g. "Getafe 1-1 Celta" for an
+    away draw, not "Celta 1-1 Getafe".
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -195,19 +200,13 @@ def build_message(match, team_id):
     full_time = match["score"]["fullTime"]
 
     celta_is_home = home_team.get("id") == team_id
-    if celta_is_home:
-        opponent_name = away_team.get("name", "o rival")
-        celta_score = full_time.get("home")
-        opponent_score = full_time.get("away")
-    else:
-        opponent_name = home_team.get("name", "o rival")
-        celta_score = full_time.get("away")
-        opponent_score = full_time.get("home")
+    home_name = "Celta" if celta_is_home else home_team.get("name", "o rival")
+    away_name = away_team.get("name", "o rival") if celta_is_home else "Celta"
 
     outcome = determine_outcome(match, team_id)
     phrase = get_random_phrase(outcome)
 
-    return f"{phrase} Celta {celta_score}-{opponent_score} {opponent_name}"
+    return f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
 
 
 # ---------------------------------------------------------------------------
