@@ -176,6 +176,42 @@ never commit real tokens into the code.
 That's it -- from here, the workflow keeps checking every 20 minutes on its
 own, and Manel Bot will post whenever Celta finish a match.
 
+## Testing the bot
+
+There's no real match finishing on demand, so testing the "does Telegram
+actually receive a message" part is separated from the "does it correctly
+read football-data.org" part.
+
+**Test that Telegram posting works (no real match needed):**
+
+Run the script with `--test-telegram` -- it sends a message clearly labelled
+as a test to every configured channel, and never touches football-data.org
+or `state.json`.
+
+- From the **Actions** tab: click **Run workflow**, tick the **test_mode**
+  checkbox, then run. This uses your real repository secrets, so it's the
+  easiest way to test since you already set those up there.
+- Locally (if you've done step 5 above and have a `.env` file):
+
+  ```bash
+  export $(grep -v '^#' .env | xargs)
+  python main.py --test-telegram
+  ```
+
+Either way, check the configured channel(s) for a message starting with
+"🧪 Manel Bot test message".
+
+**About testing a real result end-to-end:** the very first time the real
+(non-test) workflow runs, it won't post anything even if Celta have a
+recent finished match -- by design, it just records that match as "already
+seen" so you don't get an old result posted the moment you set things up
+(see "First-run bootstrap" in `main.py`). From the next new result onwards,
+it posts normally. If you want to see a real result posted sooner, you can
+manually edit `state.json`, set `"last_processed_match_id"` to some old
+value that isn't Celta's actual latest finished match id, commit it, and
+run the workflow -- it'll treat the latest match as new and post it for
+real using live data.
+
 ## Project files
 
 | File | Purpose |

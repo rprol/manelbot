@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "*/20 * * * *"
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Send a test Telegram message instead of checking for a real result"
+        type: boolean
+        default: false
 
 # The job needs permission to push the updated state.json file back to
 # this repo using the automatically-provided GITHUB_TOKEN.
@@ -33,7 +38,12 @@ jobs:
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           CELTA_TEAM_ID: ${{ secrets.CELTA_TEAM_ID }}
-        run: python main.py
+        run: |
+          if [ "${{ inputs.test_mode }}" = "true" ]; then
+            python main.py --test-telegram
+          else
+            python main.py
+          fi
 
       - name: Commit updated state file (if it changed)
         run: |

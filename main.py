@@ -252,11 +252,51 @@ def send_telegram_message(bot_token, channel_id, text):
     return True
 
 
+def run_test_message():
+    """
+    Send a clearly-labelled test message to every configured Telegram
+    channel, without touching football-data.org or state.json at all.
+
+    This lets you check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID are
+    set up correctly (right token, right channel id, bot is actually an
+    admin) without waiting for a real Celta match to finish.
+
+    Triggered by running: python main.py --test-telegram
+    """
+    telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
+    telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
+
+    message = (
+        "🧪 Manel Bot test message -- if you can see this in Telegram, "
+        "your TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID are set up "
+        "correctly! (No real match result is attached to this message.)"
+    )
+
+    successes = 0
+    for channel_id in telegram_channel_ids:
+        print(f"Sending test message to '{channel_id}'...")
+        if send_telegram_message(telegram_token, channel_id, message):
+            print(f"  -> sent OK to '{channel_id}'.")
+            successes += 1
+        else:
+            print(f"  -> FAILED to send to '{channel_id}'. See error above.")
+
+    print(f"\n{successes}/{len(telegram_channel_ids)} channel(s) received the test message.")
+    sys.exit(0 if successes == len(telegram_channel_ids) else 1)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
+    # Special test mode: "python main.py --test-telegram" only exercises
+    # the Telegram-sending part, skipping football-data.org and state.json
+    # entirely. See run_test_message() above for details.
+    if "--test-telegram" in sys.argv:
+        run_test_message()
+        return
+
     # 1. Load required configuration from environment variables / secrets.
     telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
     telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
