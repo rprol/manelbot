@@ -188,8 +188,9 @@ Run the script with `--test-telegram` -- it picks a random outcome
 (WIN/DRAW/LOSS) with made-up teams and score, builds the message the exact
 same way a real result would (random phrase from `phrases.py` included),
 and sends it to every configured channel. It never touches
-football-data.org or `state.json`. The message is clearly prefixed with
-"🧪 TEST" so nobody mistakes the made-up score for a real result.
+football-data.org or `state.json`. **Note:** the message is not labelled
+as a test -- it looks exactly like a real result with a made-up score, so
+only run this when that won't confuse anyone reading the chat.
 
 - From the **Actions** tab: click **Run workflow**, tick the **test_mode**
   checkbox, then run. This uses your real repository secrets, so it's the
@@ -201,8 +202,7 @@ football-data.org or `state.json`. The message is clearly prefixed with
   python main.py --test-telegram
   ```
 
-Either way, check the configured channel(s) for a message starting with
-"🧪 TEST".
+Either way, check the configured channel(s) for the sample result message.
 
 **About testing a real result end-to-end:** the very first time the real
 (non-test) workflow runs, it won't post anything even if Celta have a

@@ -282,8 +282,10 @@ def run_test_message():
     This lets you check both that Telegram is set up correctly (right
     token, right channel id, bot allowed to post) AND preview what a real
     result message will look like, without waiting for a real Celta match
-    to finish. It's clearly marked as a test so nobody mistakes the made-up
-    score for a real result.
+    to finish. Note: the message sent is indistinguishable from a real
+    result (no "TEST" label), since the made-up score is realistic-looking
+    on purpose -- only run this when that's not going to confuse anyone
+    reading the chat.
 
     Triggered by running: python main.py --test-telegram
     """
@@ -291,11 +293,7 @@ def run_test_message():
     telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
 
     fake_match = random.choice(FAKE_TEST_MATCHES)
-    sample_result_line = build_message(fake_match, DEFAULT_CELTA_TEAM_ID)
-    message = (
-        "🧪 TEST -- this is what a real result message will look like "
-        f"(made-up score, not a real match):\n\n{sample_result_line}"
-    )
+    message = build_message(fake_match, DEFAULT_CELTA_TEAM_ID)
 
     successes = 0
     for channel_id in telegram_channel_ids:
