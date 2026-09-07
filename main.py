@@ -252,24 +252,52 @@ def send_telegram_message(bot_token, channel_id, text):
     return True
 
 
+# A few made-up matches used only for --test-telegram, one per outcome, so
+# a test run can show what a WIN/DRAW/LOSS message actually looks like with
+# a real (randomly picked) phrase from phrases.py. These are never sent to
+# football-data.org or compared against real results -- purely fake data.
+FAKE_TEST_MATCHES = [
+    {  # Celta at home, WIN
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 559, "name": "Getafe CF"},
+        "score": {"winner": "HOME_TEAM", "fullTime": {"home": 2, "away": 1}},
+    },
+    {  # Celta away, DRAW
+        "homeTeam": {"id": 77, "name": "Athletic Club"},
+        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "score": {"winner": "DRAW", "fullTime": {"home": 1, "away": 1}},
+    },
+    {  # Celta away, LOSS
+        "homeTeam": {"id": 86, "name": "Real Madrid CF"},
+        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "score": {"winner": "HOME_TEAM", "fullTime": {"home": 3, "away": 0}},
+    },
+]
+
+
 def run_test_message():
     """
-    Send a clearly-labelled test message to every configured Telegram
-    channel, without touching football-data.org or state.json at all.
+    Send a sample result message -- a random outcome (WIN/DRAW/LOSS) with a
+    real, randomly-picked phrase from phrases.py -- to every configured
+    Telegram channel, without touching football-data.org or state.json at
+    all.
 
-    This lets you check that TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID are
-    set up correctly (right token, right channel id, bot is actually an
-    admin) without waiting for a real Celta match to finish.
+    This lets you check both that Telegram is set up correctly (right
+    token, right channel id, bot allowed to post) AND preview what a real
+    result message will look like, without waiting for a real Celta match
+    to finish. It's clearly marked as a test so nobody mistakes the made-up
+    score for a real result.
 
     Triggered by running: python main.py --test-telegram
     """
     telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
     telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
 
+    fake_match = random.choice(FAKE_TEST_MATCHES)
+    sample_result_line = build_message(fake_match, DEFAULT_CELTA_TEAM_ID)
     message = (
-        "🧪 Manel Bot test message -- if you can see this in Telegram, "
-        "your TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID are set up "
-        "correctly! (No real match result is attached to this message.)"
+        "🧪 TEST -- this is what a real result message will look like "
+        f"(made-up score, not a real match):\n\n{sample_result_line}"
     )
 
     successes = 0
