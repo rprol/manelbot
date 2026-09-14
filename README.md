@@ -43,16 +43,20 @@ just editing text.
 
    The categories are (see `classify_match()` in `main.py`):
    - **Win:** comeback (behind at half-time, won) · blowout (won by 3+) ·
-     narrow (won by 1) · standard (anything else)
+     narrow (won by 1) · late (winning goal in the closing minutes) ·
+     standard (anything else)
    - **Draw:** rally (behind at half-time, clawed back to a draw) ·
-     squandered (led at half-time, dropped it to a draw) · flat (level at
-     half-time and full-time)
+     squandered (led at half-time, dropped it to a draw) · late
+     (equalizer in the closing minutes) · flat (level at half-time and
+     full-time)
    - **Loss:** collapse (led at half-time, lost) · blowout (lost by 3+) ·
-     narrow (lost by 1) · standard (anything else)
+     narrow (lost by 1) · late (decisive goal conceded in the closing
+     minutes) · standard (anything else)
 
-   Note: football-data.org's free tier doesn't include minute-by-minute
-   goal data, so things like "last-minute winner" aren't detectable --
-   half-time vs full-time is as granular as the data gets.
+   The three "late" categories, and scorer names in the posted message,
+   come from a second data source -- see "Scorer names and late-goal
+   drama" below. Without it, football-data.org alone gives enough (via
+   half-time vs full-time) for every other category.
 
 4. `state.json` is updated with the new match id, and the GitHub Actions
    workflow commits that change back to the repo, so the next scheduled run
@@ -63,6 +67,38 @@ the bot deliberately does **not** post anything -- it just records the
 latest finished match as "already seen". This avoids posting about an old
 match the moment you first set the bot up. From the next new result
 onwards, it posts normally.
+
+## Scorer names and late-goal drama
+
+football-data.org's free tier only gives half-time and full-time scores --
+no goal-by-goal detail, so there's no way to know who scored or when. To
+add that, `main.py` also queries
+[TheSportsDB](https://www.thesportsdb.com/), a second, independent free
+API, right after detecting a new result. If it finds the matching event,
+Celta's scorer(s) and goal minute(s) get appended to the message, e.g.:
+
+> Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe (marcou Iago Aspas, min. 23)
+
+and if the decisive goal was scored in the closing minutes (from minute 85
+onwards), the match is classified as `WIN_LATE`, `DRAW_LATE`, or
+`LOSS_LATE` instead of its usual category, using a phrase that reflects the
+late drama.
+
+**This is entirely optional and fails safely.** If TheSportsDB is
+unreachable, doesn't have that match, or its data doesn't add up to the
+real score (its goal data is volunteer-maintained and can be incomplete --
+we've seen this happen on a real match), the bot just posts the normal
+message with no scorer detail. Nothing about the core flow depends on this
+working.
+
+No signup is required: `THESPORTSDB_TEAM_ID` (Celta's id, `133937`, already
+verified against the live API) and `THESPORTSDB_API_KEY` (`3`, TheSportsDB's
+public free test key -- per their own docs, this is the normal way to use
+their v1 API for free/hobby projects) both have working defaults baked into
+`main.py`. You don't need to set either one to get this working. If you
+ever want a dedicated (non-shared) key, register for free at
+[thesportsdb.com/free_sports_api](https://www.thesportsdb.com/free_sports_api)
+and set `THESPORTSDB_API_KEY` to override the default.
 
 ## Setup guide
 
@@ -195,6 +231,9 @@ never commit real tokens into the code.
    - `FOOTBALL_DATA_API_KEY`
    - `CELTA_TEAM_ID` (optional -- only needed if it's different from the
      default `558`; if you skip it, the script falls back to `558`)
+   - `THESPORTSDB_TEAM_ID` and `THESPORTSDB_API_KEY` (both optional -- see
+     "Scorer names and late-goal drama" above; skip both and it just uses
+     the free defaults)
 
 ### 7. Enable and test the workflow
 
@@ -218,13 +257,15 @@ read football-data.org" part.
 **Test that Telegram posting works (no real match needed):**
 
 Run the script with `--test-telegram` -- it picks a random category out of
-all 11 (comeback win, blowout loss, flat draw, etc. -- see "How it works"
-above) with made-up teams and score, builds the message the exact same way
-a real result would (random phrase from `phrases.py` included), and sends
-it to every configured channel. It never touches football-data.org or
-`state.json`. **Note:** the message is not labelled as a test -- it looks
-exactly like a real result with a made-up score, so only run this when
-that won't confuse anyone reading the chat.
+all 14 (comeback win, blowout loss, flat draw, a last-minute winner, etc.
+-- see "How it works" above) with made-up teams, score, and (for some
+categories) fake scorer/goal-minute data, builds the message the exact
+same way a real result would (random phrase from `phrases.py` included),
+and sends it to every configured channel. It never touches
+football-data.org, TheSportsDB, or `state.json`. **Note:** the message is
+not labelled as a test -- it looks exactly like a real result with a
+made-up score, so only run this when that won't confuse anyone reading the
+chat.
 
 - From the **Actions** tab: click **Run workflow**, tick the **test_mode**
   checkbox, then run. This uses your real repository secrets, so it's the
@@ -253,8 +294,8 @@ real using live data.
 
 | File | Purpose |
 |---|---|
-| `main.py` | The core script: fetches match data, classifies the result into a category, posts to Telegram, updates state. |
-| `phrases.py` | Galician phrase banks, one per category (11 total) -- edit freely. |
+| `main.py` | The core script: fetches match data, optionally enriches it with scorer/goal-minute data from TheSportsDB, classifies the result into a category, posts to Telegram, updates state. |
+| `phrases.py` | Galician phrase banks, one per category (14 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
 | `state.json` | Tracks the last match id that was posted, so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |
@@ -274,3 +315,9 @@ real using live data.
   was upgraded to a supergroup (see step 2 above).
 - **football-data.org returns an error:** double-check
   `FOOTBALL_DATA_API_KEY` and `CELTA_TEAM_ID`.
+- **A `WARNING: TheSportsDB ...` line in the logs:** this is expected and
+  harmless -- it just means the result was posted without scorer names/
+  late-goal detail that run (TheSportsDB was unreachable, didn't have that
+  match yet, or its data didn't fully add up). It never stops the actual
+  result from being posted. Only worth investigating if it happens on
+  every single run.

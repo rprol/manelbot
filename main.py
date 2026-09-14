@@ -61,6 +61,29 @@ MATCH_FETCH_LIMIT = 5
 # How long to wait for network calls before giving up, in seconds.
 REQUEST_TIMEOUT = 15
 
+# TheSportsDB (https://www.thesportsdb.com) is an optional second data
+# source, used only to enrich a result with things football-data.org's free
+# tier doesn't give us: goal scorer names and the exact minute of each
+# goal. If this lookup fails, or can't confidently be matched to the right
+# match, we just post without that extra detail -- see
+# fetch_thesportsdb_goals(). It never blocks the core posting flow.
+
+# TheSportsDB's numeric id for Celta Vigo -- confirmed by querying the live
+# API and cross-checking that it returned the same real match
+# football-data.org reported (same date, same score).
+DEFAULT_THESPORTSDB_TEAM_ID = "133937"
+
+# "3" is TheSportsDB's public free test key, usable with no registration --
+# per their own docs, this is the normal way to use the v1 API for free/
+# hobby projects. It's shared across everyone using it, so if reliability
+# ever becomes an issue, register for a personal key at
+# https://www.thesportsdb.com/free_sports_api and set THESPORTSDB_API_KEY.
+DEFAULT_THESPORTSDB_API_KEY = "3"
+
+# A goal scored at or after this minute counts as "late drama" for the
+# WIN_LATE / DRAW_LATE / LOSS_LATE categories.
+LATE_GOAL_MINUTE = 85
+
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -166,7 +189,122 @@ def fetch_recent_matches(api_key, team_id):
     return matches
 
 
-def classify_match(match, team_id):
+# ---------------------------------------------------------------------------
+# TheSportsDB (optional enrichment: scorer names + goal minutes)
+# ---------------------------------------------------------------------------
+
+def fetch_thesportsdb_goals(match, thesportsdb_team_id, api_key):
+    """
+    Look up the same match on TheSportsDB and return its goal-by-goal
+    timeline, so we can name scorers and detect late drama that
+    football-data.org's free tier can't tell us on its own.
+
+    Returns a list of goals sorted by minute, each a dict like
+    {"minute": 41, "scorer": "Ferran Jutglà", "celta_scored": True}, or
+    None if anything about this lookup fails, or we can't confidently
+    match it to the right event. Callers must treat None as "no enrichment
+    available this time" and carry on without it -- never as an error
+    worth stopping for.
+    """
+    match_date = match.get("utcDate", "")[:10]  # "2026-09-13T12:00:00Z" -> "2026-09-13"
+    if not match_date:
+        return None
+
+    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}"
+
+    try:
+        response = requests.get(
+            f"{base_url}/eventslast.php",
+            params={"id": thesportsdb_team_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        events = response.json().get("results") or []
+    except (requests.exceptions.RequestException, ValueError) as error:
+        print(f"WARNING: TheSportsDB lookup failed, posting without scorer detail: {error}")
+        return None
+
+    # Find the event that's actually the same match: same calendar date.
+    # (football-data.org and TheSportsDB use different ids for the same
+    # real-world match, so date is our simplest reliable correlation key --
+    # a team can't play two matches on the same day.)
+    matching_event = next((e for e in events if e.get("dateEvent") == match_date), None)
+    if matching_event is None:
+        print(f"WARNING: no TheSportsDB event found for {match_date}, posting without scorer detail.")
+        return None
+
+    try:
+        response = requests.get(
+            f"{base_url}/lookuptimeline.php",
+            params={"id": matching_event.get("idEvent")},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        timeline = response.json().get("timeline") or []
+    except (requests.exceptions.RequestException, ValueError) as error:
+        print(f"WARNING: TheSportsDB timeline lookup failed, posting without scorer detail: {error}")
+        return None
+
+    goals = []
+    for event in timeline:
+        if event.get("strTimeline") != "Goal":
+            continue
+        try:
+            minute = int(event["intTime"])
+        except (KeyError, TypeError, ValueError):
+            continue  # skip malformed entries rather than crash on bad data
+        goals.append(
+            {
+                "minute": minute,
+                "scorer": event.get("strPlayer") or "descoñecido",
+                "celta_scored": event.get("idTeam") == thesportsdb_team_id,
+            }
+        )
+
+    goals.sort(key=lambda g: g["minute"])
+    return goals
+
+
+def _classify_late_drama(goals, celta_ft, opponent_ft):
+    """
+    Look at the very last goal of the match: if it was scored at or after
+    LATE_GOAL_MINUTE and it's what actually decided the final result (i.e.
+    the score was level or worse for Celta immediately before it), return
+    the matching WIN_LATE/DRAW_LATE/LOSS_LATE category. Otherwise return
+    None, so classify_match() falls back to its normal half-time/full-time
+    categories -- e.g. a late goal that just padded an already-safe lead
+    doesn't count as "late drama".
+
+    TheSportsDB's timeline data is volunteer-maintained and can be
+    incomplete -- we've seen a real match where one team's goal was simply
+    missing from it. If the goals list's own counts don't add up to the
+    real final score, we can't trust which goal was really "last", so we
+    bail out here rather than risk a wrong late-drama call; classify_match()
+    then falls back to the half-time/full-time categories instead.
+    """
+    celta_goal_count = sum(1 for g in goals if g["celta_scored"])
+    opponent_goal_count = len(goals) - celta_goal_count
+    if celta_goal_count != celta_ft or opponent_goal_count != opponent_ft:
+        return None
+
+    last_goal = goals[-1]
+    if last_goal["minute"] < LATE_GOAL_MINUTE:
+        return None
+
+    # Score margin (from Celta's perspective) just before that last goal.
+    margin = celta_ft - opponent_ft
+    margin_before_last_goal = margin - (1 if last_goal["celta_scored"] else -1)
+
+    if margin > 0 and last_goal["celta_scored"] and margin_before_last_goal <= 0:
+        return "WIN_LATE"
+    if margin == 0 and last_goal["celta_scored"] and margin_before_last_goal < 0:
+        return "DRAW_LATE"
+    if margin < 0 and not last_goal["celta_scored"] and margin_before_last_goal >= 0:
+        return "LOSS_LATE"
+    return None
+
+
+def classify_match(match, team_id, goals=None):
     """
     Work out not just WIN/DRAW/LOSS but the *shape* of the match from
     Celta's point of view, by comparing the half-time score to the
@@ -175,9 +313,13 @@ def classify_match(match, team_id):
     "LOSS_BLOWOUT", "DRAW_FLAT".
 
     football-data.org's free tier doesn't give us minute-by-minute goal
-    data (no "goals" array), so we can't detect things like a last-minute
-    winner -- half-time vs full-time is the most detail we have, and it's
-    enough to tell a comeback from a collapse from a routine result.
+    data, so on its own we can't detect things like a last-minute winner --
+    half-time vs full-time is enough to tell a comeback from a collapse
+    from a routine result, though. If `goals` is provided (from
+    fetch_thesportsdb_goals()), we additionally check for WIN_LATE /
+    DRAW_LATE / LOSS_LATE -- see _classify_late_drama(). Leave `goals` as
+    None (the default) to classify using only half-time/full-time, exactly
+    as before.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -193,6 +335,11 @@ def classify_match(match, team_id):
         celta_ht, opponent_ht = half_time.get("away"), half_time.get("home")
 
     margin = celta_ft - opponent_ft
+
+    if goals:
+        late_category = _classify_late_drama(goals, celta_ft, opponent_ft)
+        if late_category:
+            return late_category
 
     # Half-time scores are normally present, but guard against them being
     # missing (e.g. incomplete data) -- if so, we just can't tell a
@@ -226,7 +373,30 @@ def classify_match(match, team_id):
     return "DRAW_FLAT"
 
 
-def build_message(match, team_id):
+def _format_celta_scorers(goals):
+    """
+    Build a short Galician clause naming Celta's scorer(s) and the minute
+    each goal went in, e.g. "marcou Iago Aspas, min. 23" for one goal, or
+    "marcaron Iago Aspas (min. 23) e Ferran Jutglà (min. 78)" for two.
+    Returns "" (nothing to add) if there's no goal data or Celta didn't
+    score.
+    """
+    if not goals:
+        return ""
+
+    celta_goals = [g for g in goals if g["celta_scored"]]
+    if not celta_goals:
+        return ""
+
+    if len(celta_goals) == 1:
+        goal = celta_goals[0]
+        return f"marcou {goal['scorer']}, min. {goal['minute']}"
+
+    parts = [f"{g['scorer']} (min. {g['minute']})" for g in celta_goals]
+    return "marcaron " + ", ".join(parts[:-1]) + " e " + parts[-1]
+
+
+def build_message(match, team_id, goals=None):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
@@ -235,6 +405,13 @@ def build_message(match, team_id):
     playing at home, second when playing away) so the score reads the
     same way it would on a scoreboard -- e.g. "Getafe 1-1 Celta" for an
     away draw, not "Celta 1-1 Getafe".
+
+    If `goals` is provided (from fetch_thesportsdb_goals()), it's used
+    both to pick a more specific category (see classify_match()) and to
+    name Celta's scorer(s) at the end of the message, e.g.:
+    "... Celta 2-1 Getafe (marcou Iago Aspas, min. 23)"
+    Leave it as None (the default) to build the message exactly as before,
+    with no scorer detail.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -245,10 +422,15 @@ def build_message(match, team_id):
     home_name = "Celta" if celta_is_home else home_team.get("name", "o rival")
     away_name = away_team.get("name", "o rival") if celta_is_home else "Celta"
 
-    category = classify_match(match, team_id)
+    category = classify_match(match, team_id, goals)
     phrase = get_random_phrase(category)
 
-    return f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
+    result_line = f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
+
+    scorers_note = _format_celta_scorers(goals)
+    if scorers_note:
+        return f"{result_line} ({scorers_note})"
+    return result_line
 
 
 # ---------------------------------------------------------------------------
@@ -293,108 +475,194 @@ def send_telegram_message(bot_token, channel_id, text):
 # A few made-up matches used only for --test-telegram, one per category (see
 # classify_match() above), so a test run can show what each kind of message
 # actually looks like with a real (randomly picked) phrase from phrases.py.
-# These are never sent to football-data.org or compared against real
-# results -- purely fake data, but each one's half-time/full-time scores
-# are deliberately chosen to land in a specific category.
+# These are never sent to football-data.org or TheSportsDB, or compared
+# against real results -- purely fake data, but each one's scores (and, for
+# a few, "goals" timeline) are deliberately chosen to land in a specific
+# category. Each entry is {"match": <football-data.org-shaped dict>,
+# "goals": <fetch_thesportsdb_goals()-shaped list, or None>} so
+# run_test_message() can exercise both the plain and TheSportsDB-enriched
+# code paths.
 FAKE_TEST_MATCHES = [
     {  # WIN_COMEBACK: Celta home, down 0-1 at half, won 2-1
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 601, "name": "Getafe CF"},
-        "score": {
-            "winner": "HOME_TEAM",
-            "fullTime": {"home": 2, "away": 1},
-            "halfTime": {"home": 0, "away": 1},
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 601, "name": "Getafe CF"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 2, "away": 1},
+                "halfTime": {"home": 0, "away": 1},
+            },
         },
+        "goals": None,
     },
     {  # WIN_BLOWOUT: Celta away, already ahead 0-2 at half, won 1-4
-        "homeTeam": {"id": 602, "name": "Athletic Club"},
-        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {
-            "winner": "AWAY_TEAM",
-            "fullTime": {"home": 1, "away": 4},
-            "halfTime": {"home": 0, "away": 2},
+        "match": {
+            "homeTeam": {"id": 602, "name": "Athletic Club"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 1, "away": 4},
+                "halfTime": {"home": 0, "away": 2},
+            },
         },
+        "goals": None,
     },
-    {  # WIN_NARROW: Celta home, 0-0 at half, won 1-0
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 603, "name": "Real Madrid CF"},
-        "score": {
-            "winner": "HOME_TEAM",
-            "fullTime": {"home": 1, "away": 0},
-            "halfTime": {"home": 0, "away": 0},
+    {  # WIN_NARROW: Celta home, 0-0 at half, won 1-0 -- also shows a
+       # scorer note attached to a non-late category (min. 63 is well
+       # before LATE_GOAL_MINUTE, so this does NOT become WIN_LATE).
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 603, "name": "Real Madrid CF"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 1, "away": 0},
+                "halfTime": {"home": 0, "away": 0},
+            },
         },
+        "goals": [{"minute": 63, "scorer": "Borja Iglesias", "celta_scored": True}],
     },
     {  # WIN_STANDARD: Celta away, already ahead 0-1 at half, won 1-3
-        "homeTeam": {"id": 604, "name": "Real Valladolid CF"},
-        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {
-            "winner": "AWAY_TEAM",
-            "fullTime": {"home": 1, "away": 3},
-            "halfTime": {"home": 0, "away": 1},
+        "match": {
+            "homeTeam": {"id": 604, "name": "Real Valladolid CF"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 1, "away": 3},
+                "halfTime": {"home": 0, "away": 1},
+            },
         },
+        "goals": None,
+    },
+    {  # WIN_LATE: Celta home, level 0-0 all match until a single goal in
+       # minute 90 wins it -- overrides what would otherwise be WIN_NARROW.
+        "match": {
+            "homeTeam": {"id": 612, "name": "Girona FC"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 0, "away": 1},
+                "halfTime": {"home": 0, "away": 0},
+            },
+        },
+        "goals": [{"minute": 90, "scorer": "Iago Aspas", "celta_scored": True}],
     },
     {  # DRAW_RALLY: Celta away, down 2-0 at half, rallied to 2-2
-        "homeTeam": {"id": 605, "name": "Deportivo Alavés"},
-        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {
-            "winner": "DRAW",
-            "fullTime": {"home": 2, "away": 2},
-            "halfTime": {"home": 2, "away": 0},
+        "match": {
+            "homeTeam": {"id": 605, "name": "Deportivo Alavés"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "DRAW",
+                "fullTime": {"home": 2, "away": 2},
+                "halfTime": {"home": 2, "away": 0},
+            },
         },
+        "goals": None,
     },
     {  # DRAW_SQUANDERED: Celta home, ahead 1-0 at half, only drew 1-1
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 606, "name": "Rayo Vallecano"},
-        "score": {
-            "winner": "DRAW",
-            "fullTime": {"home": 1, "away": 1},
-            "halfTime": {"home": 1, "away": 0},
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 606, "name": "Rayo Vallecano"},
+            "score": {
+                "winner": "DRAW",
+                "fullTime": {"home": 1, "away": 1},
+                "halfTime": {"home": 1, "away": 0},
+            },
         },
+        "goals": None,
     },
     {  # DRAW_FLAT: Celta home, 0-0 at half, 1-1 at full-time
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 607, "name": "Sevilla FC"},
-        "score": {
-            "winner": "DRAW",
-            "fullTime": {"home": 1, "away": 1},
-            "halfTime": {"home": 0, "away": 0},
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 607, "name": "Sevilla FC"},
+            "score": {
+                "winner": "DRAW",
+                "fullTime": {"home": 1, "away": 1},
+                "halfTime": {"home": 0, "away": 0},
+            },
         },
+        "goals": None,
+    },
+    {  # DRAW_LATE: Celta away, down 0-1 since minute 30, equalizes at
+       # minute 90 -- overrides what would otherwise be DRAW_RALLY.
+        "match": {
+            "homeTeam": {"id": 613, "name": "CD Leganés"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "DRAW",
+                "fullTime": {"home": 1, "away": 1},
+                "halfTime": {"home": 1, "away": 0},
+            },
+        },
+        "goals": [
+            {"minute": 30, "scorer": "Rival Player", "celta_scored": False},
+            {"minute": 90, "scorer": "Fran Beltrán", "celta_scored": True},
+        ],
     },
     {  # LOSS_COLLAPSE: Celta home, ahead 2-0 at half, lost 2-3
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 608, "name": "Real Sociedad"},
-        "score": {
-            "winner": "AWAY_TEAM",
-            "fullTime": {"home": 2, "away": 3},
-            "halfTime": {"home": 2, "away": 0},
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 608, "name": "Real Sociedad"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 2, "away": 3},
+                "halfTime": {"home": 2, "away": 0},
+            },
         },
+        "goals": None,
     },
     {  # LOSS_BLOWOUT: Celta away, down 1-0 at half, lost 4-0
-        "homeTeam": {"id": 609, "name": "RCD Espanyol"},
-        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {
-            "winner": "HOME_TEAM",
-            "fullTime": {"home": 4, "away": 0},
-            "halfTime": {"home": 1, "away": 0},
+        "match": {
+            "homeTeam": {"id": 609, "name": "RCD Espanyol"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 4, "away": 0},
+                "halfTime": {"home": 1, "away": 0},
+            },
         },
+        "goals": None,
     },
     {  # LOSS_NARROW: Celta home, 0-0 at half, lost 1-2
-        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 610, "name": "Villarreal CF"},
-        "score": {
-            "winner": "AWAY_TEAM",
-            "fullTime": {"home": 1, "away": 2},
-            "halfTime": {"home": 0, "away": 0},
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 610, "name": "Villarreal CF"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 1, "away": 2},
+                "halfTime": {"home": 0, "away": 0},
+            },
         },
+        "goals": None,
     },
     {  # LOSS_STANDARD: Celta away, down 1-0 at half, lost 3-1
-        "homeTeam": {"id": 611, "name": "CA Osasuna"},
-        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {
-            "winner": "HOME_TEAM",
-            "fullTime": {"home": 3, "away": 1},
-            "halfTime": {"home": 1, "away": 0},
+        "match": {
+            "homeTeam": {"id": 611, "name": "CA Osasuna"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 3, "away": 1},
+                "halfTime": {"home": 1, "away": 0},
+            },
         },
+        "goals": None,
+    },
+    {  # LOSS_LATE: Celta home, led 1-0 then conceded twice, the second
+       # (deciding) goal at minute 90 -- overrides what would otherwise be
+       # LOSS_NARROW.
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 614, "name": "UD Las Palmas"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 1, "away": 2},
+                "halfTime": {"home": 1, "away": 0},
+            },
+        },
+        "goals": [
+            {"minute": 30, "scorer": "Williot Swedberg", "celta_scored": True},
+            {"minute": 60, "scorer": "Rival Player", "celta_scored": False},
+            {"minute": 90, "scorer": "Rival Player 2", "celta_scored": False},
+        ],
     },
 ]
 
@@ -419,8 +687,8 @@ def run_test_message():
     telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
     telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
 
-    fake_match = random.choice(FAKE_TEST_MATCHES)
-    message = build_message(fake_match, DEFAULT_CELTA_TEAM_ID)
+    fake_entry = random.choice(FAKE_TEST_MATCHES)
+    message = build_message(fake_entry["match"], DEFAULT_CELTA_TEAM_ID, fake_entry["goals"])
 
     successes = 0
     for channel_id in telegram_channel_ids:
@@ -458,6 +726,11 @@ def main():
     # secret hasn't been configured -- .get()'s default would never kick
     # in for an empty-but-present value.
     celta_team_id = os.environ.get("CELTA_TEAM_ID") or DEFAULT_CELTA_TEAM_ID
+    # Same "or" pattern for the optional TheSportsDB config -- neither of
+    # these is a secret, both have working free defaults (see their
+    # DEFAULT_* constants above).
+    thesportsdb_team_id = os.environ.get("THESPORTSDB_TEAM_ID") or DEFAULT_THESPORTSDB_TEAM_ID
+    thesportsdb_api_key = os.environ.get("THESPORTSDB_API_KEY") or DEFAULT_THESPORTSDB_API_KEY
 
     # 2. Load what we last posted about.
     state = load_state()
@@ -493,10 +766,16 @@ def main():
         print("Latest finished match has already been posted. Nothing to do.")
         return
 
-    # 6. We have a new result! Build the message and post it to every
-    #    configured channel. We try all of them even if one fails, so a
-    #    single broken channel doesn't stop the others from getting posted.
-    message = build_message(latest_match, celta_team_id)
+    # 6. We have a new result! Try to enrich it with scorer/goal-minute
+    #    data from TheSportsDB -- if this fails or doesn't find a match,
+    #    goals is None and build_message() just posts without that extra
+    #    detail. This never blocks posting the core result.
+    goals = fetch_thesportsdb_goals(latest_match, thesportsdb_team_id, thesportsdb_api_key)
+
+    # Build the message and post it to every configured channel. We try
+    # all of them even if one fails, so a single broken channel doesn't
+    # stop the others from getting posted.
+    message = build_message(latest_match, celta_team_id, goals)
     print(f"Posting new result: {message}")
 
     successes = 0

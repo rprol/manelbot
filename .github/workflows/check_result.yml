@@ -38,6 +38,8 @@ jobs:
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           CELTA_TEAM_ID: ${{ secrets.CELTA_TEAM_ID }}
+          THESPORTSDB_TEAM_ID: ${{ secrets.THESPORTSDB_TEAM_ID }}
+          THESPORTSDB_API_KEY: ${{ secrets.THESPORTSDB_API_KEY }}
         run: |
           if [ "${{ inputs.test_mode }}" = "true" ]; then
             python main.py --test-telegram
