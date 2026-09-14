@@ -79,7 +79,7 @@ DRAW_FLAT_PHRASES = [
     "Regular, Celta, regular! Un empate que sabe a pouco.",
     "Regular, Celta, regular! Nin se gaña nin se perde, e iso pesa.",
     "Regular, Celta, regular! Puntos que non acaban de convencer.",
-    "Regular, Celta, regular! Outra tarde sen brillo en Balaídos.",
+    "Regular, Celta, regular! Outra tarde sen brillo no marcador.",
 ]
 
 # --- LOSS categories --------------------------------------------------------
@@ -112,7 +112,7 @@ LOSS_NARROW_PHRASES = [
 # Any other loss (e.g. behind throughout, lost by 2) -- the general-purpose bank.
 LOSS_STANDARD_PHRASES = [
     "Mal, Celta, mal! Unha noite negra para os celestes.",
-    "Mal, Celta, mal! Balaídos queda en silencio, mágoa profunda.",
+    "Mal, Celta, mal! Queda o silencio celeste, mágoa profunda.",
     "Mal, Celta, mal! Derrota dura que doe no fondo da alma celeste.",
     "Mal, Celta, mal! A tristeza invade o celtismo hoxe.",
 ]
