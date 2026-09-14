@@ -10,9 +10,10 @@ rather than kept running all the time. Each run does the following:
 
   1. Read state.json to see which finished match we last posted about.
   2. Ask football-data.org for Celta's most recent matches.
-  3. If there's a finished match we haven't posted yet, work out whether it
-     was a WIN, DRAW, or LOSS for Celta, pick a random Galician phrase, and
-     send a message to the Telegram channel.
+  3. If there's a finished match we haven't posted yet, work out not just
+     WIN/DRAW/LOSS but the *shape* of the match (comeback, blowout, narrow
+     result, etc. -- see classify_match()), pick a random Galician phrase
+     matching that, and send a message to the Telegram channel.
   4. Save the new match id to state.json so we don't post the same result
      twice next time this script runs.
 
@@ -165,23 +166,64 @@ def fetch_recent_matches(api_key, team_id):
     return matches
 
 
-def determine_outcome(match, team_id):
+def classify_match(match, team_id):
     """
-    Work out the result from Celta's point of view: "WIN", "DRAW", or "LOSS".
-    Handles both home and away matches.
+    Work out not just WIN/DRAW/LOSS but the *shape* of the match from
+    Celta's point of view, by comparing the half-time score to the
+    full-time score. Handles both home and away matches. Returns one of
+    the category keys in phrases.PHRASES, e.g. "WIN_COMEBACK",
+    "LOSS_BLOWOUT", "DRAW_FLAT".
+
+    football-data.org's free tier doesn't give us minute-by-minute goal
+    data (no "goals" array), so we can't detect things like a last-minute
+    winner -- half-time vs full-time is the most detail we have, and it's
+    enough to tell a comeback from a collapse from a routine result.
     """
     team_id = int(team_id)
-    winner = match.get("score", {}).get("winner")  # "HOME_TEAM" / "AWAY_TEAM" / "DRAW"
-    home_id = match.get("homeTeam", {}).get("id")
+    home_team = match["homeTeam"]
+    full_time = match["score"]["fullTime"]
+    half_time = match["score"].get("halfTime") or {}
 
-    if winner == "DRAW":
-        return "DRAW"
+    celta_is_home = home_team.get("id") == team_id
+    if celta_is_home:
+        celta_ft, opponent_ft = full_time.get("home"), full_time.get("away")
+        celta_ht, opponent_ht = half_time.get("home"), half_time.get("away")
+    else:
+        celta_ft, opponent_ft = full_time.get("away"), full_time.get("home")
+        celta_ht, opponent_ht = half_time.get("away"), half_time.get("home")
 
-    celta_is_home = home_id == team_id
-    celta_won = (winner == "HOME_TEAM" and celta_is_home) or (
-        winner == "AWAY_TEAM" and not celta_is_home
-    )
-    return "WIN" if celta_won else "LOSS"
+    margin = celta_ft - opponent_ft
+
+    # Half-time scores are normally present, but guard against them being
+    # missing (e.g. incomplete data) -- if so, we just can't tell a
+    # comeback/collapse/rally/squandered-lead story and fall back to the
+    # plain result-based categories below.
+    half_time_known = celta_ht is not None and opponent_ht is not None
+
+    if margin > 0:  # WIN
+        if half_time_known and celta_ht < opponent_ht:
+            return "WIN_COMEBACK"
+        if margin >= 3:
+            return "WIN_BLOWOUT"
+        if margin == 1:
+            return "WIN_NARROW"
+        return "WIN_STANDARD"
+
+    if margin < 0:  # LOSS
+        if half_time_known and celta_ht > opponent_ht:
+            return "LOSS_COLLAPSE"
+        if margin <= -3:
+            return "LOSS_BLOWOUT"
+        if margin == -1:
+            return "LOSS_NARROW"
+        return "LOSS_STANDARD"
+
+    # DRAW
+    if half_time_known and celta_ht < opponent_ht:
+        return "DRAW_RALLY"
+    if half_time_known and celta_ht > opponent_ht:
+        return "DRAW_SQUANDERED"
+    return "DRAW_FLAT"
 
 
 def build_message(match, team_id):
@@ -203,8 +245,8 @@ def build_message(match, team_id):
     home_name = "Celta" if celta_is_home else home_team.get("name", "o rival")
     away_name = away_team.get("name", "o rival") if celta_is_home else "Celta"
 
-    outcome = determine_outcome(match, team_id)
-    phrase = get_random_phrase(outcome)
+    category = classify_match(match, team_id)
+    phrase = get_random_phrase(category)
 
     return f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
 
@@ -248,35 +290,121 @@ def send_telegram_message(bot_token, channel_id, text):
     return True
 
 
-# A few made-up matches used only for --test-telegram, one per outcome, so
-# a test run can show what a WIN/DRAW/LOSS message actually looks like with
-# a real (randomly picked) phrase from phrases.py. These are never sent to
-# football-data.org or compared against real results -- purely fake data.
+# A few made-up matches used only for --test-telegram, one per category (see
+# classify_match() above), so a test run can show what each kind of message
+# actually looks like with a real (randomly picked) phrase from phrases.py.
+# These are never sent to football-data.org or compared against real
+# results -- purely fake data, but each one's half-time/full-time scores
+# are deliberately chosen to land in a specific category.
 FAKE_TEST_MATCHES = [
-    {  # Celta at home, WIN
+    {  # WIN_COMEBACK: Celta home, down 0-1 at half, won 2-1
         "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "awayTeam": {"id": 559, "name": "Getafe CF"},
-        "score": {"winner": "HOME_TEAM", "fullTime": {"home": 2, "away": 1}},
+        "awayTeam": {"id": 601, "name": "Getafe CF"},
+        "score": {
+            "winner": "HOME_TEAM",
+            "fullTime": {"home": 2, "away": 1},
+            "halfTime": {"home": 0, "away": 1},
+        },
     },
-    {  # Celta away, DRAW
-        "homeTeam": {"id": 77, "name": "Athletic Club"},
+    {  # WIN_BLOWOUT: Celta away, already ahead 0-2 at half, won 1-4
+        "homeTeam": {"id": 602, "name": "Athletic Club"},
         "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {"winner": "DRAW", "fullTime": {"home": 1, "away": 1}},
+        "score": {
+            "winner": "AWAY_TEAM",
+            "fullTime": {"home": 1, "away": 4},
+            "halfTime": {"home": 0, "away": 2},
+        },
     },
-    {  # Celta away, LOSS
-        "homeTeam": {"id": 86, "name": "Real Madrid CF"},
+    {  # WIN_NARROW: Celta home, 0-0 at half, won 1-0
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 603, "name": "Real Madrid CF"},
+        "score": {
+            "winner": "HOME_TEAM",
+            "fullTime": {"home": 1, "away": 0},
+            "halfTime": {"home": 0, "away": 0},
+        },
+    },
+    {  # WIN_STANDARD: Celta away, already ahead 0-1 at half, won 1-3
+        "homeTeam": {"id": 604, "name": "Real Valladolid CF"},
         "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
-        "score": {"winner": "HOME_TEAM", "fullTime": {"home": 3, "away": 0}},
+        "score": {
+            "winner": "AWAY_TEAM",
+            "fullTime": {"home": 1, "away": 3},
+            "halfTime": {"home": 0, "away": 1},
+        },
+    },
+    {  # DRAW_RALLY: Celta away, down 2-0 at half, rallied to 2-2
+        "homeTeam": {"id": 605, "name": "Deportivo Alavés"},
+        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "score": {
+            "winner": "DRAW",
+            "fullTime": {"home": 2, "away": 2},
+            "halfTime": {"home": 2, "away": 0},
+        },
+    },
+    {  # DRAW_SQUANDERED: Celta home, ahead 1-0 at half, only drew 1-1
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 606, "name": "Rayo Vallecano"},
+        "score": {
+            "winner": "DRAW",
+            "fullTime": {"home": 1, "away": 1},
+            "halfTime": {"home": 1, "away": 0},
+        },
+    },
+    {  # DRAW_FLAT: Celta home, 0-0 at half, 1-1 at full-time
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 607, "name": "Sevilla FC"},
+        "score": {
+            "winner": "DRAW",
+            "fullTime": {"home": 1, "away": 1},
+            "halfTime": {"home": 0, "away": 0},
+        },
+    },
+    {  # LOSS_COLLAPSE: Celta home, ahead 2-0 at half, lost 2-3
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 608, "name": "Real Sociedad"},
+        "score": {
+            "winner": "AWAY_TEAM",
+            "fullTime": {"home": 2, "away": 3},
+            "halfTime": {"home": 2, "away": 0},
+        },
+    },
+    {  # LOSS_BLOWOUT: Celta away, down 1-0 at half, lost 4-0
+        "homeTeam": {"id": 609, "name": "RCD Espanyol"},
+        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "score": {
+            "winner": "HOME_TEAM",
+            "fullTime": {"home": 4, "away": 0},
+            "halfTime": {"home": 1, "away": 0},
+        },
+    },
+    {  # LOSS_NARROW: Celta home, 0-0 at half, lost 1-2
+        "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "awayTeam": {"id": 610, "name": "Villarreal CF"},
+        "score": {
+            "winner": "AWAY_TEAM",
+            "fullTime": {"home": 1, "away": 2},
+            "halfTime": {"home": 0, "away": 0},
+        },
+    },
+    {  # LOSS_STANDARD: Celta away, down 1-0 at half, lost 3-1
+        "homeTeam": {"id": 611, "name": "CA Osasuna"},
+        "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+        "score": {
+            "winner": "HOME_TEAM",
+            "fullTime": {"home": 3, "away": 1},
+            "halfTime": {"home": 1, "away": 0},
+        },
     },
 ]
 
 
 def run_test_message():
     """
-    Send a sample result message -- a random outcome (WIN/DRAW/LOSS) with a
-    real, randomly-picked phrase from phrases.py -- to every configured
-    Telegram channel, without touching football-data.org or state.json at
-    all.
+    Send a sample result message -- a random category (comeback, blowout,
+    narrow win, etc. -- see classify_match()) with a real, randomly-picked
+    phrase from phrases.py -- to every configured Telegram channel, without
+    touching football-data.org or state.json at all.
 
     This lets you check both that Telegram is set up correctly (right
     token, right channel id, bot allowed to post) AND preview what a real

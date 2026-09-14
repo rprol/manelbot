@@ -12,15 +12,17 @@ never posted twice.
 
 ## ⚠️ Before going live: review the phrases
 
-The Galician phrases in [phrases.py](phrases.py) were drafted by an AI. Each
-outcome always starts with a fixed opener you specified -- "Ben, Celta,
-ben!" for wins, "Regular, Celta, regular!" for draws, "Mal, Celta, mal!" for
-losses -- followed by an AI-drafted continuation that varies per phrase.
-**Please have a native Galician speaker read through the continuations in
-`WIN_PHRASES`, `DRAW_PHRASES`, and `LOSS_PHRASES` in that file and correct
-anything that sounds wrong before you start posting to a real channel.**
-The file is plain Python lists of strings, so editing, replacing, or adding
-phrases is just editing text.
+The Galician phrases in [phrases.py](phrases.py) were drafted by an AI
+(except the original WIN phrase you provided: "Ben, Celta, ben! Partido
+gañado con mérito!"). Every phrase always starts with a fixed opener for its
+outcome -- "Ben, Celta, ben!" for wins, "Regular, Celta, regular!" for
+draws, "Mal, Celta, mal!" for losses -- followed by an AI-drafted
+continuation that varies per phrase and per category (see "How it works"
+below for what the categories are). **Please have a native Galician speaker
+read through the continuations in `phrases.py` and correct anything that
+sounds wrong before you start posting to a real channel.** The file is
+plain Python lists of strings, so editing, replacing, or adding phrases is
+just editing text.
 
 ## How it works
 
@@ -32,12 +34,25 @@ phrases is just editing text.
    `state.json`.
    - If it's the same, nothing happened since last time -- the script exits
      quietly.
-   - If it's different, that's a new result: the script works out whether
-     Celta won, drew, or lost (checking both home and away cases), picks a
-     random Galician phrase for that outcome from `phrases.py`, and posts a
-     message like:
+   - If it's different, that's a new result: the script compares the
+     half-time score to the full-time score to work out not just
+     WIN/DRAW/LOSS but the *shape* of the match, picks a random Galician
+     phrase matching that from `phrases.py`, and posts a message like:
 
-     > Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe
+     > Ben, Celta, ben! Ían perdendo e deron a volta ao marcador! Celta 2-1 Getafe
+
+   The categories are (see `classify_match()` in `main.py`):
+   - **Win:** comeback (behind at half-time, won) · blowout (won by 3+) ·
+     narrow (won by 1) · standard (anything else)
+   - **Draw:** rally (behind at half-time, clawed back to a draw) ·
+     squandered (led at half-time, dropped it to a draw) · flat (level at
+     half-time and full-time)
+   - **Loss:** collapse (led at half-time, lost) · blowout (lost by 3+) ·
+     narrow (lost by 1) · standard (anything else)
+
+   Note: football-data.org's free tier doesn't include minute-by-minute
+   goal data, so things like "last-minute winner" aren't detectable --
+   half-time vs full-time is as granular as the data gets.
 
 4. `state.json` is updated with the new match id, and the GitHub Actions
    workflow commits that change back to the repo, so the next scheduled run
@@ -202,13 +217,14 @@ read football-data.org" part.
 
 **Test that Telegram posting works (no real match needed):**
 
-Run the script with `--test-telegram` -- it picks a random outcome
-(WIN/DRAW/LOSS) with made-up teams and score, builds the message the exact
-same way a real result would (random phrase from `phrases.py` included),
-and sends it to every configured channel. It never touches
-football-data.org or `state.json`. **Note:** the message is not labelled
-as a test -- it looks exactly like a real result with a made-up score, so
-only run this when that won't confuse anyone reading the chat.
+Run the script with `--test-telegram` -- it picks a random category out of
+all 11 (comeback win, blowout loss, flat draw, etc. -- see "How it works"
+above) with made-up teams and score, builds the message the exact same way
+a real result would (random phrase from `phrases.py` included), and sends
+it to every configured channel. It never touches football-data.org or
+`state.json`. **Note:** the message is not labelled as a test -- it looks
+exactly like a real result with a made-up score, so only run this when
+that won't confuse anyone reading the chat.
 
 - From the **Actions** tab: click **Run workflow**, tick the **test_mode**
   checkbox, then run. This uses your real repository secrets, so it's the
@@ -237,8 +253,8 @@ real using live data.
 
 | File | Purpose |
 |---|---|
-| `main.py` | The core script: fetches match data, decides the outcome, posts to Telegram, updates state. |
-| `phrases.py` | Galician phrase banks (WIN/DRAW/LOSS) -- edit freely. |
+| `main.py` | The core script: fetches match data, classifies the result into a category, posts to Telegram, updates state. |
+| `phrases.py` | Galician phrase banks, one per category (11 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
 | `state.json` | Tracks the last match id that was posted, so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |
