@@ -18,10 +18,10 @@
 # for that outcome ("Ben, Celta, ben!" / "Regular, Celta, regular!" / "Mal,
 # Celta, mal!"), as required -- only the continuation changes.
 #
-# The *_LATE categories are only reachable when TheSportsDB enrichment
-# (goal-by-goal timeline data) is available for that match -- see
-# fetch_thesportsdb_goals() in main.py. Without it, matches fall back to the
-# half-time/full-time-only categories above/below as normal.
+# The *_LATE and *_TEN_MEN categories are only reachable when TheSportsDB
+# enrichment (goal/card timeline data) is available for that match -- see
+# fetch_thesportsdb_match_events() in main.py. Without it, matches fall
+# back to the half-time/full-time-only categories above/below as normal.
 
 import random
 
@@ -66,6 +66,14 @@ WIN_LATE_PHRASES = [
     "Ben, Celta, ben! Gol no tempo de desconto que vale tres puntos!",
     "Ben, Celta, ben! Agonía e gloria, o gol chegou cando xa non se esperaba!",
     "Ben, Celta, ben! Explosión de alegría cun gol de última hora!",
+]
+
+# Celta won despite having a player sent off during the match.
+WIN_TEN_MEN_PHRASES = [
+    "Ben, Celta, ben! Vitoria heroica xogando con dez!",
+    "Ben, Celta, ben! Con un menos no campo e aínda así gañaron!",
+    "Ben, Celta, ben! Que carácter, gañar cunha expulsión de por medio!",
+    "Ben, Celta, ben! Dez homes bastaron para levar os tres puntos!",
 ]
 
 # --- DRAW categories --------------------------------------------------------
@@ -148,6 +156,14 @@ LOSS_LATE_PHRASES = [
     "Mal, Celta, mal! Tan preto de sumar e todo esvarou nos minutos finais.",
 ]
 
+# Celta lost after having a player sent off during the match.
+LOSS_TEN_MEN_PHRASES = [
+    "Mal, Celta, mal! A expulsión pesou demasiado nesta derrota.",
+    "Mal, Celta, mal! Con dez homes foi imposible sacar algo positivo.",
+    "Mal, Celta, mal! A tarxeta vermella deixou ao equipo sen opcións.",
+    "Mal, Celta, mal! Xogar con un menos pasou factura hoxe.",
+]
+
 # All phrase banks in one place, keyed by category. main.py's
 # classify_match() works out which key applies to a given match, and
 # get_random_phrase() below looks it up here.
@@ -157,6 +173,7 @@ PHRASES = {
     "WIN_NARROW": WIN_NARROW_PHRASES,
     "WIN_STANDARD": WIN_STANDARD_PHRASES,
     "WIN_LATE": WIN_LATE_PHRASES,
+    "WIN_TEN_MEN": WIN_TEN_MEN_PHRASES,
     "DRAW_RALLY": DRAW_RALLY_PHRASES,
     "DRAW_SQUANDERED": DRAW_SQUANDERED_PHRASES,
     "DRAW_FLAT": DRAW_FLAT_PHRASES,
@@ -166,6 +183,7 @@ PHRASES = {
     "LOSS_NARROW": LOSS_NARROW_PHRASES,
     "LOSS_STANDARD": LOSS_STANDARD_PHRASES,
     "LOSS_LATE": LOSS_LATE_PHRASES,
+    "LOSS_TEN_MEN": LOSS_TEN_MEN_PHRASES,
 }
 
 

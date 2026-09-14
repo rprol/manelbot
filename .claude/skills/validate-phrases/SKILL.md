@@ -13,16 +13,18 @@ missing category, a typo'd key, a phrase that forgot its required opener.
 
 ## What must hold
 
-- `phrases.PHRASES` has exactly these 14 keys: `WIN_COMEBACK`,
-  `WIN_BLOWOUT`, `WIN_NARROW`, `WIN_STANDARD`, `WIN_LATE`, `DRAW_RALLY`,
-  `DRAW_SQUANDERED`, `DRAW_FLAT`, `DRAW_LATE`, `LOSS_COLLAPSE`,
-  `LOSS_BLOWOUT`, `LOSS_NARROW`, `LOSS_STANDARD`, `LOSS_LATE` — these must
-  match exactly what `classify_match()` in `main.py` can return, or a
-  lookup will `KeyError` the moment that category occurs in a real match.
-  The `*_LATE` categories are only reachable when TheSportsDB goal-minute
-  data is available (see `fetch_thesportsdb_goals()`) — a match with no
-  such data, or with a `goals` list whose counts don't add up to the real
-  score (TheSportsDB's data can be incomplete), never produces one.
+- `phrases.PHRASES` has exactly these 16 keys: `WIN_COMEBACK`,
+  `WIN_BLOWOUT`, `WIN_NARROW`, `WIN_STANDARD`, `WIN_LATE`, `WIN_TEN_MEN`,
+  `DRAW_RALLY`, `DRAW_SQUANDERED`, `DRAW_FLAT`, `DRAW_LATE`,
+  `LOSS_COLLAPSE`, `LOSS_BLOWOUT`, `LOSS_NARROW`, `LOSS_STANDARD`,
+  `LOSS_LATE`, `LOSS_TEN_MEN` — these must match exactly what
+  `classify_match()` in `main.py` can return, or a lookup will `KeyError`
+  the moment that category occurs in a real match. The `*_LATE` and
+  `*_TEN_MEN` categories are only reachable when TheSportsDB goal/card
+  data is available (see `fetch_thesportsdb_match_events()`) — a match
+  with no such data, or with a `goals` list whose counts don't add up to
+  the real score (TheSportsDB's data can be incomplete), never produces
+  one.
 - Every phrase in a `WIN_*` list starts with `"Ben, Celta, ben!"`.
 - Every phrase in a `DRAW_*` list starts with `"Regular, Celta, regular!"`.
 - Every phrase in a `LOSS_*` list starts with `"Mal, Celta, mal!"`.
@@ -38,9 +40,9 @@ missing category, a typo'd key, a phrase that forgot its required opener.
    from phrases import PHRASES
 
    expected_categories = {
-       'WIN_COMEBACK', 'WIN_BLOWOUT', 'WIN_NARROW', 'WIN_STANDARD', 'WIN_LATE',
+       'WIN_COMEBACK', 'WIN_BLOWOUT', 'WIN_NARROW', 'WIN_STANDARD', 'WIN_LATE', 'WIN_TEN_MEN',
        'DRAW_RALLY', 'DRAW_SQUANDERED', 'DRAW_FLAT', 'DRAW_LATE',
-       'LOSS_COLLAPSE', 'LOSS_BLOWOUT', 'LOSS_NARROW', 'LOSS_STANDARD', 'LOSS_LATE',
+       'LOSS_COLLAPSE', 'LOSS_BLOWOUT', 'LOSS_NARROW', 'LOSS_STANDARD', 'LOSS_LATE', 'LOSS_TEN_MEN',
    }
    prefixes = {
        'WIN': 'Ben, Celta, ben!',

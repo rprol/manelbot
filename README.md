@@ -43,20 +43,23 @@ just editing text.
 
    The categories are (see `classify_match()` in `main.py`):
    - **Win:** comeback (behind at half-time, won) · blowout (won by 3+) ·
-     narrow (won by 1) · late (winning goal in the closing minutes) ·
-     standard (anything else)
+     narrow (won by 1) · late (winning goal in the closing minutes) · ten
+     men (won despite a Celta player being sent off) · standard (anything
+     else)
    - **Draw:** rally (behind at half-time, clawed back to a draw) ·
      squandered (led at half-time, dropped it to a draw) · late
      (equalizer in the closing minutes) · flat (level at half-time and
      full-time)
    - **Loss:** collapse (led at half-time, lost) · blowout (lost by 3+) ·
      narrow (lost by 1) · late (decisive goal conceded in the closing
-     minutes) · standard (anything else)
+     minutes) · ten men (lost while playing with a man down) · standard
+     (anything else)
 
-   The three "late" categories, and scorer names in the posted message,
-   come from a second data source -- see "Scorer names and late-goal
-   drama" below. Without it, football-data.org alone gives enough (via
-   half-time vs full-time) for every other category.
+   The "late" and "ten men" categories, plus scorer names and a
+   standout-player callout in the posted message, come from a second data
+   source -- see "Scorer names and late-goal drama" below. Without it,
+   football-data.org alone gives enough (via half-time vs full-time) for
+   every other category.
 
 4. `state.json` is updated with the new match id, and the GitHub Actions
    workflow commits that change back to the repo, so the next scheduled run
@@ -68,27 +71,44 @@ latest finished match as "already seen". This avoids posting about an old
 match the moment you first set the bot up. From the next new result
 onwards, it posts normally.
 
-## Scorer names and late-goal drama
+## Scorer names, standout players, and match drama
 
 football-data.org's free tier only gives half-time and full-time scores --
-no goal-by-goal detail, so there's no way to know who scored or when. To
-add that, `main.py` also queries
+no goal-by-goal detail, so there's no way to know who scored, when, or
+whether anyone was sent off. To add that, `main.py` also queries
 [TheSportsDB](https://www.thesportsdb.com/), a second, independent free
-API, right after detecting a new result. If it finds the matching event,
-Celta's scorer(s) and goal minute(s) get appended to the message, e.g.:
+API, right after detecting a new result. If it finds the matching event:
 
-> Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe (marcou Iago Aspas, min. 23)
+- **Celta's scorer(s) and goal minute(s)** get appended to the message,
+  e.g.:
 
-and if the decisive goal was scored in the closing minutes (from minute 85
-onwards), the match is classified as `WIN_LATE`, `DRAW_LATE`, or
-`LOSS_LATE` instead of its usual category, using a phrase that reflects the
-late drama.
+  > Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe (marcou Iago Aspas (min. 23))
+
+- If the decisive goal was scored in the closing minutes (from minute 85
+  onwards), the match is classified as `WIN_LATE`, `DRAW_LATE`, or
+  `LOSS_LATE` instead of its usual category, using a phrase that reflects
+  the late drama.
+- If a Celta player was sent off (red card) and the match was still won or
+  lost, it's classified as `WIN_TEN_MEN` or `LOSS_TEN_MEN` instead.
+- If any Celta player was involved in **2 or more goals** this match
+  (their own goals plus assists they set up for teammates), they get
+  called out by name as the standout performer, e.g.:
+
+  > ... Celta 2-1 Getafe (marcou Iago Aspas (min. 23, min. 80)). Iago Aspas leva 2 accións de gol hoxe!
+
+  This is the most honest signal the data can support for "who had a
+  great match" -- there's no official man-of-the-match or player-rating
+  data on the free tier (checked), so it only recognizes goal
+  involvement, not e.g. a strong defensive performance with no goal or
+  assist.
 
 **This is entirely optional and fails safely.** If TheSportsDB is
 unreachable, doesn't have that match, or its data doesn't add up to the
 real score (its goal data is volunteer-maintained and can be incomplete --
-we've seen this happen on a real match), the bot just posts the normal
-message with no scorer detail. Nothing about the core flow depends on this
+we've seen this happen on a real match, where one team's goal was simply
+missing from its timeline; `classify_match()` checks for this and falls
+back safely rather than risk a wrong call), the bot just posts the normal
+message with no extra detail. Nothing about the core flow depends on this
 working.
 
 No signup is required: `THESPORTSDB_TEAM_ID` (Celta's id, `133937`, already
@@ -257,13 +277,14 @@ read football-data.org" part.
 **Test that Telegram posting works (no real match needed):**
 
 Run the script with `--test-telegram` -- it picks a random category out of
-all 14 (comeback win, blowout loss, flat draw, a last-minute winner, etc.
--- see "How it works" above) with made-up teams, score, and (for some
-categories) fake scorer/goal-minute data, builds the message the exact
-same way a real result would (random phrase from `phrases.py` included),
-and sends it to every configured channel. It never touches
-football-data.org, TheSportsDB, or `state.json`. **Note:** the message is
-not labelled as a test -- it looks exactly like a real result with a
+all 16 (comeback win, blowout loss, flat draw, a last-minute winner, a
+win with a man sent off, etc. -- see "How it works" above) with made-up
+teams, score, and (for some categories) fake scorer/assist/red-card data,
+builds the message the exact same way a real result would (random phrase
+from `phrases.py` included), and sends it to every configured channel. It
+never touches football-data.org, TheSportsDB, or `state.json`. **Note:**
+the message is not labelled as a test -- it looks exactly like a real
+result with a
 made-up score, so only run this when that won't confuse anyone reading the
 chat.
 
@@ -294,8 +315,8 @@ real using live data.
 
 | File | Purpose |
 |---|---|
-| `main.py` | The core script: fetches match data, optionally enriches it with scorer/goal-minute data from TheSportsDB, classifies the result into a category, posts to Telegram, updates state. |
-| `phrases.py` | Galician phrase banks, one per category (14 total) -- edit freely. |
+| `main.py` | The core script: fetches match data, optionally enriches it with scorer/assist/red-card data from TheSportsDB, classifies the result into a category, posts to Telegram, updates state. |
+| `phrases.py` | Galician phrase banks, one per category (16 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
 | `state.json` | Tracks the last match id that was posted, so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |

@@ -63,10 +63,10 @@ REQUEST_TIMEOUT = 15
 
 # TheSportsDB (https://www.thesportsdb.com) is an optional second data
 # source, used only to enrich a result with things football-data.org's free
-# tier doesn't give us: goal scorer names and the exact minute of each
-# goal. If this lookup fails, or can't confidently be matched to the right
-# match, we just post without that extra detail -- see
-# fetch_thesportsdb_goals(). It never blocks the core posting flow.
+# tier doesn't give us: goal scorer/assist names, goal minutes, and red
+# cards. If this lookup fails, or can't confidently be matched to the
+# right match, we just post without that extra detail -- see
+# fetch_thesportsdb_match_events(). It never blocks the core posting flow.
 
 # TheSportsDB's numeric id for Celta Vigo -- confirmed by querying the live
 # API and cross-checking that it returned the same real match
@@ -190,21 +190,29 @@ def fetch_recent_matches(api_key, team_id):
 
 
 # ---------------------------------------------------------------------------
-# TheSportsDB (optional enrichment: scorer names + goal minutes)
+# TheSportsDB (optional enrichment: scorers, assists, red cards)
 # ---------------------------------------------------------------------------
 
-def fetch_thesportsdb_goals(match, thesportsdb_team_id, api_key):
+def fetch_thesportsdb_match_events(match, thesportsdb_team_id, api_key):
     """
-    Look up the same match on TheSportsDB and return its goal-by-goal
-    timeline, so we can name scorers and detect late drama that
-    football-data.org's free tier can't tell us on its own.
+    Look up the same match on TheSportsDB and return its goal-by-goal and
+    card timeline, so we can name scorers (and who assisted them), detect
+    late drama, and detect a Celta player being sent off -- none of which
+    football-data.org's free tier can tell us on its own.
 
-    Returns a list of goals sorted by minute, each a dict like
-    {"minute": 41, "scorer": "Ferran Jutglà", "celta_scored": True}, or
-    None if anything about this lookup fails, or we can't confidently
-    match it to the right event. Callers must treat None as "no enrichment
-    available this time" and carry on without it -- never as an error
-    worth stopping for.
+    Returns {"goals": [...], "red_cards": [...]}, where:
+      - goals is a list sorted by minute, each a dict like
+        {"minute": 41, "scorer": "Ferran Jutglà", "celta_scored": True,
+         "assist": "Hugo González" or None}
+      - red_cards is a list of dicts like
+        {"minute": 72, "player": "...", "celta": True}
+
+    Returns None (not a dict) if anything about this lookup fails, or we
+    can't confidently match it to the right event. Callers must treat None
+    as "no enrichment available this time" and carry on without it --
+    never as an error worth stopping for. Either inner list can still be
+    empty (a real match can have zero red cards) -- only the outer None
+    means "no data at all".
     """
     match_date = match.get("utcDate", "")[:10]  # "2026-09-13T12:00:00Z" -> "2026-09-13"
     if not match_date:
@@ -221,7 +229,7 @@ def fetch_thesportsdb_goals(match, thesportsdb_team_id, api_key):
         response.raise_for_status()
         events = response.json().get("results") or []
     except (requests.exceptions.RequestException, ValueError) as error:
-        print(f"WARNING: TheSportsDB lookup failed, posting without scorer detail: {error}")
+        print(f"WARNING: TheSportsDB lookup failed, posting without extra detail: {error}")
         return None
 
     # Find the event that's actually the same match: same calendar date.
@@ -230,7 +238,7 @@ def fetch_thesportsdb_goals(match, thesportsdb_team_id, api_key):
     # a team can't play two matches on the same day.)
     matching_event = next((e for e in events if e.get("dateEvent") == match_date), None)
     if matching_event is None:
-        print(f"WARNING: no TheSportsDB event found for {match_date}, posting without scorer detail.")
+        print(f"WARNING: no TheSportsDB event found for {match_date}, posting without extra detail.")
         return None
 
     try:
@@ -242,27 +250,41 @@ def fetch_thesportsdb_goals(match, thesportsdb_team_id, api_key):
         response.raise_for_status()
         timeline = response.json().get("timeline") or []
     except (requests.exceptions.RequestException, ValueError) as error:
-        print(f"WARNING: TheSportsDB timeline lookup failed, posting without scorer detail: {error}")
+        print(f"WARNING: TheSportsDB timeline lookup failed, posting without extra detail: {error}")
         return None
 
     goals = []
+    red_cards = []
     for event in timeline:
-        if event.get("strTimeline") != "Goal":
-            continue
         try:
             minute = int(event["intTime"])
         except (KeyError, TypeError, ValueError):
             continue  # skip malformed entries rather than crash on bad data
-        goals.append(
-            {
-                "minute": minute,
-                "scorer": event.get("strPlayer") or "descoñecido",
-                "celta_scored": event.get("idTeam") == thesportsdb_team_id,
-            }
-        )
+
+        event_type = event.get("strTimeline")
+        is_celta = event.get("idTeam") == thesportsdb_team_id
+
+        if event_type == "Goal":
+            goals.append(
+                {
+                    "minute": minute,
+                    "scorer": event.get("strPlayer") or "descoñecido",
+                    "celta_scored": is_celta,
+                    "assist": event.get("strAssist") or None,
+                }
+            )
+        elif event_type == "Card" and "red" in (event.get("strTimelineDetail") or "").lower():
+            red_cards.append(
+                {
+                    "minute": minute,
+                    "player": event.get("strPlayer") or "descoñecido",
+                    "celta": is_celta,
+                }
+            )
 
     goals.sort(key=lambda g: g["minute"])
-    return goals
+    red_cards.sort(key=lambda c: c["minute"])
+    return {"goals": goals, "red_cards": red_cards}
 
 
 def _classify_late_drama(goals, celta_ft, opponent_ft):
@@ -304,7 +326,26 @@ def _classify_late_drama(goals, celta_ft, opponent_ft):
     return None
 
 
-def classify_match(match, team_id, goals=None):
+def _classify_ten_men(red_cards, margin):
+    """
+    If Celta had a player sent off and the opponent did not (so this is
+    specifically about playing a man down, not a chaotic match with cards
+    both ways), return WIN_TEN_MEN or LOSS_TEN_MEN. A draw with a red card
+    doesn't get its own category -- it falls back to the normal draw
+    categories -- to keep this to the two clearly notable cases.
+    """
+    celta_sent_off = any(c["celta"] for c in red_cards)
+    opponent_sent_off = any(not c["celta"] for c in red_cards)
+    if not celta_sent_off or opponent_sent_off:
+        return None
+    if margin > 0:
+        return "WIN_TEN_MEN"
+    if margin < 0:
+        return "LOSS_TEN_MEN"
+    return None
+
+
+def classify_match(match, team_id, goals=None, red_cards=None):
     """
     Work out not just WIN/DRAW/LOSS but the *shape* of the match from
     Celta's point of view, by comparing the half-time score to the
@@ -315,11 +356,13 @@ def classify_match(match, team_id, goals=None):
     football-data.org's free tier doesn't give us minute-by-minute goal
     data, so on its own we can't detect things like a last-minute winner --
     half-time vs full-time is enough to tell a comeback from a collapse
-    from a routine result, though. If `goals` is provided (from
-    fetch_thesportsdb_goals()), we additionally check for WIN_LATE /
-    DRAW_LATE / LOSS_LATE -- see _classify_late_drama(). Leave `goals` as
-    None (the default) to classify using only half-time/full-time, exactly
-    as before.
+    from a routine result, though. If `goals` and/or `red_cards` are
+    provided (from fetch_thesportsdb_match_events()), we additionally
+    check for WIN_LATE/DRAW_LATE/LOSS_LATE (see _classify_late_drama()) and
+    WIN_TEN_MEN/LOSS_TEN_MEN (see _classify_ten_men()), checked in that
+    order since a late goal is usually the more immediate story even in a
+    match also played with ten men. Leave both as None (the default) to
+    classify using only half-time/full-time, exactly as before.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -340,6 +383,11 @@ def classify_match(match, team_id, goals=None):
         late_category = _classify_late_drama(goals, celta_ft, opponent_ft)
         if late_category:
             return late_category
+
+    if red_cards:
+        ten_men_category = _classify_ten_men(red_cards, margin)
+        if ten_men_category:
+            return ten_men_category
 
     # Half-time scores are normally present, but guard against them being
     # missing (e.g. incomplete data) -- if so, we just can't tell a
@@ -375,9 +423,11 @@ def classify_match(match, team_id, goals=None):
 
 def _format_celta_scorers(goals):
     """
-    Build a short Galician clause naming Celta's scorer(s) and the minute
-    each goal went in, e.g. "marcou Iago Aspas, min. 23" for one goal, or
-    "marcaron Iago Aspas (min. 23) e Ferran Jutglà (min. 78)" for two.
+    Build a short Galician clause naming Celta's scorer(s) and the
+    minute(s) each of their goals went in. Goals are grouped by player so
+    a brace/hat-trick reads as one clause -- e.g. "marcou Iago Aspas
+    (min. 23, min. 80)" -- instead of repeating the name. For more than
+    one scorer: "marcaron Iago Aspas (min. 23) e Ferran Jutglà (min. 78)".
     Returns "" (nothing to add) if there's no goal data or Celta didn't
     score.
     """
@@ -388,15 +438,57 @@ def _format_celta_scorers(goals):
     if not celta_goals:
         return ""
 
-    if len(celta_goals) == 1:
-        goal = celta_goals[0]
-        return f"marcou {goal['scorer']}, min. {goal['minute']}"
+    minutes_by_scorer = {}
+    scorer_order = []
+    for g in celta_goals:
+        if g["scorer"] not in minutes_by_scorer:
+            minutes_by_scorer[g["scorer"]] = []
+            scorer_order.append(g["scorer"])
+        minutes_by_scorer[g["scorer"]].append(g["minute"])
 
-    parts = [f"{g['scorer']} (min. {g['minute']})" for g in celta_goals]
+    def describe(scorer):
+        minutes = ", ".join(f"min. {m}" for m in minutes_by_scorer[scorer])
+        return f"{scorer} ({minutes})"
+
+    if len(scorer_order) == 1:
+        return f"marcou {describe(scorer_order[0])}"
+
+    parts = [describe(s) for s in scorer_order]
     return "marcaron " + ", ".join(parts[:-1]) + " e " + parts[-1]
 
 
-def build_message(match, team_id, goals=None):
+def _find_star_performer(goals):
+    """
+    Look for a Celta player involved in 2+ goal contributions this match
+    (their own goals plus assists they gave for other Celta goals), and
+    return (name, contribution_count) for whoever has the most, or None if
+    nobody reaches that bar.
+
+    This is the most honest signal our data can support for "who had a
+    great match" -- there's no official man-of-the-match or player-rating
+    data on the free tier (checked), so this only recognizes goal
+    involvement, not e.g. a strong performance with no goal or assist.
+    """
+    if not goals:
+        return None
+
+    contributions = {}
+    for g in goals:
+        if not g["celta_scored"]:
+            continue
+        contributions[g["scorer"]] = contributions.get(g["scorer"], 0) + 1
+        assist = g.get("assist")
+        if assist:
+            contributions[assist] = contributions.get(assist, 0) + 1
+
+    if not contributions:
+        return None
+
+    name, count = max(contributions.items(), key=lambda item: item[1])
+    return (name, count) if count >= 2 else None
+
+
+def build_message(match, team_id, goals=None, red_cards=None):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
@@ -406,12 +498,15 @@ def build_message(match, team_id, goals=None):
     same way it would on a scoreboard -- e.g. "Getafe 1-1 Celta" for an
     away draw, not "Celta 1-1 Getafe".
 
-    If `goals` is provided (from fetch_thesportsdb_goals()), it's used
-    both to pick a more specific category (see classify_match()) and to
-    name Celta's scorer(s) at the end of the message, e.g.:
-    "... Celta 2-1 Getafe (marcou Iago Aspas, min. 23)"
-    Leave it as None (the default) to build the message exactly as before,
-    with no scorer detail.
+    If `goals`/`red_cards` are provided (from
+    fetch_thesportsdb_match_events()), they're used both to pick a more
+    specific category (see classify_match()) and to add extra detail to
+    the message: Celta's scorer(s) in parentheses, plus a follow-up
+    sentence naming a standout player if anyone had 2+ goal contributions
+    (goals + assists) -- see _find_star_performer(). E.g.:
+    "... Celta 2-1 Getafe (marcou Iago Aspas (min. 23, min. 80)). Iago Aspas leva 2 accións de gol hoxe!"
+    Leave both as None (the default) to build the message exactly as
+    before, with no extra detail.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -422,14 +517,20 @@ def build_message(match, team_id, goals=None):
     home_name = "Celta" if celta_is_home else home_team.get("name", "o rival")
     away_name = away_team.get("name", "o rival") if celta_is_home else "Celta"
 
-    category = classify_match(match, team_id, goals)
+    category = classify_match(match, team_id, goals, red_cards)
     phrase = get_random_phrase(category)
 
     result_line = f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
 
     scorers_note = _format_celta_scorers(goals)
     if scorers_note:
-        return f"{result_line} ({scorers_note})"
+        result_line = f"{result_line} ({scorers_note})"
+
+    star = _find_star_performer(goals)
+    if star:
+        name, count = star
+        result_line = f"{result_line}. {name} leva {count} accións de gol hoxe!"
+
     return result_line
 
 
@@ -477,13 +578,16 @@ def send_telegram_message(bot_token, channel_id, text):
 # actually looks like with a real (randomly picked) phrase from phrases.py.
 # These are never sent to football-data.org or TheSportsDB, or compared
 # against real results -- purely fake data, but each one's scores (and, for
-# a few, "goals" timeline) are deliberately chosen to land in a specific
-# category. Each entry is {"match": <football-data.org-shaped dict>,
-# "goals": <fetch_thesportsdb_goals()-shaped list, or None>} so
-# run_test_message() can exercise both the plain and TheSportsDB-enriched
-# code paths.
+# some, "goals"/"red_cards" timeline) are deliberately chosen to land in a
+# specific category. Each entry is {"match": <football-data.org-shaped
+# dict>, "goals": <goals list, or None>, "red_cards": <red cards list, or
+# None>} -- both shaped like fetch_thesportsdb_match_events()'s return
+# value -- so run_test_message() can exercise both the plain and
+# TheSportsDB-enriched code paths.
 FAKE_TEST_MATCHES = [
-    {  # WIN_COMEBACK: Celta home, down 0-1 at half, won 2-1
+    {  # WIN_COMEBACK: Celta home, down 0-1 at half, won 2-1 -- also shows
+       # a brace (both goals by Aspas) with an assist on the second, which
+       # triggers the star-performer callout (2+ goal contributions).
         "match": {
             "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
             "awayTeam": {"id": 601, "name": "Getafe CF"},
@@ -493,7 +597,11 @@ FAKE_TEST_MATCHES = [
                 "halfTime": {"home": 0, "away": 1},
             },
         },
-        "goals": None,
+        "goals": [
+            {"minute": 50, "scorer": "Iago Aspas", "celta_scored": True, "assist": None},
+            {"minute": 80, "scorer": "Iago Aspas", "celta_scored": True, "assist": "Fran Beltrán"},
+        ],
+        "red_cards": None,
     },
     {  # WIN_BLOWOUT: Celta away, already ahead 0-2 at half, won 1-4
         "match": {
@@ -506,6 +614,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # WIN_NARROW: Celta home, 0-0 at half, won 1-0 -- also shows a
        # scorer note attached to a non-late category (min. 63 is well
@@ -519,7 +628,8 @@ FAKE_TEST_MATCHES = [
                 "halfTime": {"home": 0, "away": 0},
             },
         },
-        "goals": [{"minute": 63, "scorer": "Borja Iglesias", "celta_scored": True}],
+        "goals": [{"minute": 63, "scorer": "Borja Iglesias", "celta_scored": True, "assist": None}],
+        "red_cards": None,
     },
     {  # WIN_STANDARD: Celta away, already ahead 0-1 at half, won 1-3
         "match": {
@@ -532,6 +642,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # WIN_LATE: Celta home, level 0-0 all match until a single goal in
        # minute 90 wins it -- overrides what would otherwise be WIN_NARROW.
@@ -544,7 +655,22 @@ FAKE_TEST_MATCHES = [
                 "halfTime": {"home": 0, "away": 0},
             },
         },
-        "goals": [{"minute": 90, "scorer": "Iago Aspas", "celta_scored": True}],
+        "goals": [{"minute": 90, "scorer": "Iago Aspas", "celta_scored": True, "assist": None}],
+        "red_cards": None,
+    },
+    {  # WIN_TEN_MEN: Celta home, a Celta player sent off at minute 35, but
+       # still won 2-0 -- overrides what would otherwise be WIN_STANDARD.
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 615, "name": "CD Mirandés"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 2, "away": 0},
+                "halfTime": {"home": 1, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": [{"minute": 35, "player": "Marcos Alonso", "celta": True}],
     },
     {  # DRAW_RALLY: Celta away, down 2-0 at half, rallied to 2-2
         "match": {
@@ -557,6 +683,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # DRAW_SQUANDERED: Celta home, ahead 1-0 at half, only drew 1-1
         "match": {
@@ -569,6 +696,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # DRAW_FLAT: Celta home, 0-0 at half, 1-1 at full-time
         "match": {
@@ -581,6 +709,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # DRAW_LATE: Celta away, down 0-1 since minute 30, equalizes at
        # minute 90 -- overrides what would otherwise be DRAW_RALLY.
@@ -594,9 +723,10 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": [
-            {"minute": 30, "scorer": "Rival Player", "celta_scored": False},
-            {"minute": 90, "scorer": "Fran Beltrán", "celta_scored": True},
+            {"minute": 30, "scorer": "Rival Player", "celta_scored": False, "assist": None},
+            {"minute": 90, "scorer": "Fran Beltrán", "celta_scored": True, "assist": None},
         ],
+        "red_cards": None,
     },
     {  # LOSS_COLLAPSE: Celta home, ahead 2-0 at half, lost 2-3
         "match": {
@@ -609,6 +739,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # LOSS_BLOWOUT: Celta away, down 1-0 at half, lost 4-0
         "match": {
@@ -621,6 +752,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # LOSS_NARROW: Celta home, 0-0 at half, lost 1-2
         "match": {
@@ -633,6 +765,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # LOSS_STANDARD: Celta away, down 1-0 at half, lost 3-1
         "match": {
@@ -645,6 +778,7 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": None,
+        "red_cards": None,
     },
     {  # LOSS_LATE: Celta home, led 1-0 then conceded twice, the second
        # (deciding) goal at minute 90 -- overrides what would otherwise be
@@ -659,10 +793,25 @@ FAKE_TEST_MATCHES = [
             },
         },
         "goals": [
-            {"minute": 30, "scorer": "Williot Swedberg", "celta_scored": True},
-            {"minute": 60, "scorer": "Rival Player", "celta_scored": False},
-            {"minute": 90, "scorer": "Rival Player 2", "celta_scored": False},
+            {"minute": 30, "scorer": "Williot Swedberg", "celta_scored": True, "assist": None},
+            {"minute": 60, "scorer": "Rival Player", "celta_scored": False, "assist": None},
+            {"minute": 90, "scorer": "Rival Player 2", "celta_scored": False, "assist": None},
         ],
+        "red_cards": None,
+    },
+    {  # LOSS_TEN_MEN: Celta away, a Celta player sent off at minute 50,
+       # lost 0-1 -- overrides what would otherwise be LOSS_NARROW.
+        "match": {
+            "homeTeam": {"id": 616, "name": "UD Almería"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 1, "away": 0},
+                "halfTime": {"home": 0, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": [{"minute": 50, "player": "Carl Starfelt", "celta": True}],
     },
 ]
 
@@ -688,7 +837,9 @@ def run_test_message():
     telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
 
     fake_entry = random.choice(FAKE_TEST_MATCHES)
-    message = build_message(fake_entry["match"], DEFAULT_CELTA_TEAM_ID, fake_entry["goals"])
+    message = build_message(
+        fake_entry["match"], DEFAULT_CELTA_TEAM_ID, fake_entry["goals"], fake_entry["red_cards"]
+    )
 
     successes = 0
     for channel_id in telegram_channel_ids:
@@ -766,16 +917,18 @@ def main():
         print("Latest finished match has already been posted. Nothing to do.")
         return
 
-    # 6. We have a new result! Try to enrich it with scorer/goal-minute
+    # 6. We have a new result! Try to enrich it with scorer/assist/red-card
     #    data from TheSportsDB -- if this fails or doesn't find a match,
-    #    goals is None and build_message() just posts without that extra
+    #    events is None and build_message() just posts without that extra
     #    detail. This never blocks posting the core result.
-    goals = fetch_thesportsdb_goals(latest_match, thesportsdb_team_id, thesportsdb_api_key)
+    events = fetch_thesportsdb_match_events(latest_match, thesportsdb_team_id, thesportsdb_api_key)
+    goals = events["goals"] if events else None
+    red_cards = events["red_cards"] if events else None
 
     # Build the message and post it to every configured channel. We try
     # all of them even if one fails, so a single broken channel doesn't
     # stop the others from getting posted.
-    message = build_message(latest_match, celta_team_id, goals)
+    message = build_message(latest_match, celta_team_id, goals, red_cards)
     print(f"Posting new result: {message}")
 
     successes = 0
