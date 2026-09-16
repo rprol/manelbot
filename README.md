@@ -181,38 +181,35 @@ After **every** La Liga result specifically (not the Champions League --
 a league table doesn't mean anything there), `check_la_liga_result()`
 asks football-data.org for the current table (confirmed live: its free
 tier includes a working `/v4/competitions/PD/standings` endpoint) and
-adds a sentence describing where Celta currently stands -- this is
-ongoing context about the team's season, not something caused by this
-particular result, so it's independent of whether this match was a
-win/draw/loss. There are five zones (`_la_liga_table_zone()` in
-`main.py`):
+adds a sentence describing where Celta currently stands.
 
-- **European positions** (top 6, `LA_LIGA_EUROPEAN_POSITIONS`):
+**Which zone** gets described is independent of this match's own
+outcome -- it's ongoing context about the team's season, not something
+caused by this particular result. There are five zones
+(`_la_liga_table_zone()` in `main.py`): **European positions** (top 6,
+`LA_LIGA_EUROPEAN_POSITIONS`), **approaching European positions** (the
+next `LA_LIGA_APPROACHING_MARGIN` spots below that, 3 by default),
+**mid-table** (comfortably clear of both zones), **approaching the
+relegation zone** (the `LA_LIGA_APPROACHING_MARGIN` spots above it), and
+the **relegation zone** itself (bottom 3, `LA_LIGA_RELEGATION_ZONE_SIZE`).
 
-  > ... O Celta segue instalado en posicións europeas.
+**The tone of that sentence, though, IS outcome-aware** -- a win gets an
+optimistic phrase, a loss a pessimistic one, a draw a neutral one, even
+for the exact same zone. For example, mid-table:
 
-- **Approaching European positions** (the next `LA_LIGA_APPROACHING_MARGIN`
-  spots below that, 3 by default):
+- Win: `... O Celta suma e mira cara arriba na clasificación!`
+- Draw: `... O Celta segue instalado na zona media da táboa.`
+- Loss: `... Unha derrota que non compromete, pero tampouco axuda a medrar.`
 
-  > ... O Celta achégase ás posicións europeas.
+Or near the relegation zone:
 
-- **Mid-table** (comfortably clear of both zones):
+- Win: `... O Celta respira tras unha vitoria que sabe case a salvación!`
+- Loss: `... Esta derrota achega perigosamente ao Celta á zona de descenso.`
 
-  > ... O Celta segue instalado na zona media da táboa.
-
-- **Approaching the relegation zone** (the `LA_LIGA_APPROACHING_MARGIN`
-  spots above it):
-
-  > ... O Celta achégase perigosamente á zona de descenso.
-
-- **Relegation zone** (bottom 3, `LA_LIGA_RELEGATION_ZONE_SIZE`):
-
-  > ... O Celta segue instalado en posicións de descenso.
-
-No position number is included -- just the zone description. Like the
-TheSportsDB enrichment above, this fails safely: if the standings request
-fails for any reason, the result still posts normally, just without that
-extra sentence.
+No position number is included -- just the toned zone description. Like
+the TheSportsDB enrichment above, this fails safely: if the standings
+request fails for any reason, the result still posts normally, just
+without that extra sentence.
 
 **Known simplifications:**
 - "Top 6 = European positions" approximates Spain's actual qualification

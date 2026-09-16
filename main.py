@@ -325,24 +325,29 @@ def _la_liga_table_zone(position):
     return "MID_TABLE"
 
 
-def _format_table_position_note(position):
+def _format_table_position_note(outcome, position):
     """
     Build an extra Galician sentence describing Celta's current La Liga
     table position, or "" if the position is unknown (a standings lookup
     failure -- see fetch_la_liga_standings()).
 
-    Deliberately independent of whether this particular result was a
-    win/draw/loss -- it's ongoing context about where the team stands
-    ("still in Europe", "approaching the relegation zone", ...), not
-    something this one result caused, so it's added after every La Liga
-    result rather than gated to specific outcomes. Picks a random phrase
-    from phrases.TABLE_POSITION_PHRASES for whichever zone
-    _la_liga_table_zone() returns -- no position number is included in
-    the phrase itself, just the zone description.
+    WHICH zone gets described (European, mid-table, relegation, ...) is
+    independent of this match's own outcome -- it's ongoing context about
+    where the team currently stands, not something this one result
+    caused, so a note is added after every La Liga result rather than
+    gated to specific outcomes (see _la_liga_table_zone()). The TONE of
+    that description, though, IS outcome-aware: `outcome` selects an
+    optimistic phrase for a WIN, a pessimistic one for a LOSS, or a
+    neutral one for a DRAW, from phrases.TABLE_POSITION_PHRASES -- e.g. a
+    win while mid-table reads hopefully ("mira cara arriba"), a loss in
+    that same mid-table spot reads more anxiously ("non axuda"), even
+    though the underlying zone (MID_TABLE) is identical either way. No
+    position number is included in the phrase itself, just the toned
+    zone description.
     """
     if position is None:
         return ""
-    return get_random_table_phrase(_la_liga_table_zone(position))
+    return get_random_table_phrase(_la_liga_table_zone(position), outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -1541,16 +1546,20 @@ def check_la_liga_result(
     # For an actual La Liga result (not Champions League -- a league
     # table doesn't mean anything there), add a sentence about Celta's
     # current table position (European positions, mid-table, relegation
-    # zone, or approaching either edge -- see _la_liga_table_zone()).
-    # Fails safely to no note at all, same as the TheSportsDB enrichment
-    # above -- a standings lookup failure never blocks posting the core
-    # result.
+    # zone, or approaching either edge -- see _la_liga_table_zone()),
+    # toned to match this match's own outcome (optimistic for a win,
+    # pessimistic for a loss, neutral for a draw -- see
+    # _format_table_position_note()). Fails safely to no note at all,
+    # same as the TheSportsDB enrichment above -- a standings lookup
+    # failure never blocks posting the core result.
     table_note = None
     if competition_key == "La Liga":
         standings = fetch_la_liga_standings(football_api_key)
         if standings:
             position = _find_team_position(standings, celta_team_id)
-            table_note = _format_table_position_note(position)
+            celta_ft, opponent_ft = _celta_full_time_score(latest_match, celta_team_id)
+            outcome = _match_outcome(celta_ft - opponent_ft)
+            table_note = _format_table_position_note(outcome, position)
 
     # Build the message and post it to every configured channel. We try
     # all of them even if one fails, so a single broken channel doesn't

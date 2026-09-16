@@ -113,20 +113,26 @@ EXHAUSTIVE zones — `EUROPEAN` (top `LA_LIGA_EUROPEAN_POSITIONS`, 6),
 `NEAR_EUROPEAN`, `MID_TABLE`, `NEAR_RELEGATION`, `RELEGATION` (bottom
 `LA_LIGA_RELEGATION_ZONE_SIZE`, 3) — with `LA_LIGA_APPROACHING_MARGIN`
 (3) controlling how many places count as "near" either edge; every
-position falls into exactly one. `_format_table_position_note()` then
-picks a random phrase for that zone from `phrases.TABLE_POSITION_PHRASES`
-(a completely separate phrase system from `PHRASES`/`get_random_phrase()`
-— no fixed-opener rule, no position number in the text) and adds it via
-`build_message()`'s `table_note` param. **Deliberately independent of
-win/draw/loss** — added after every La Liga result, not gated to specific
-outcomes, since it's ongoing season context rather than something this
-result caused (an earlier version only fired on a WIN reaching Europe or
-a LOSS in the relegation zone, with the position number in the text —
-both were deliberately changed). Fails safely to no note (never blocks
-posting) on any standings-fetch failure, same pattern as the TheSportsDB
-enrichment. "Approaching" is a position-count proxy, not points-based —
-documented as a known simplification, same as the European-positions
-cutoff itself.
+position falls into exactly one. **WHICH zone is deliberately independent
+of win/draw/loss** — added after every La Liga result, not gated to
+specific outcomes, since it's ongoing season context rather than
+something this result caused. The TONE of the phrase, though, IS
+outcome-aware: `_format_table_position_note(outcome, position)` picks a
+random phrase from `phrases.TABLE_POSITION_PHRASES[zone][outcome]` — a
+completely separate phrase system from `PHRASES`/`get_random_phrase()`,
+no fixed-opener rule, no position number in the text, but now nested one
+level deeper than before: each zone has 3 sub-lists (`WIN` optimistic,
+`LOSS` pessimistic, `DRAW` neutral), picked via
+`get_random_table_phrase(zone, outcome)`. Adds the result via
+`build_message()`'s `table_note` param. (An earlier version had neither
+of these: it only fired on a WIN reaching Europe or a LOSS in the
+relegation zone, always neutral in tone, with the position number in the
+text — all three were deliberately changed, in that order, across
+separate requests; don't reintroduce any of them without being asked.)
+Fails safely to no note (never blocks posting) on any standings-fetch
+failure, same pattern as the TheSportsDB enrichment. "Approaching" is a
+position-count proxy, not points-based — documented as a known
+simplification, same as the European-positions cutoff itself.
 
 **Known limitations:**
 - **A two-legged tie's *first* leg can't be identified in advance** —
@@ -267,12 +273,14 @@ multi-competition support is deployed to an already-running bot).
   streak/advancement/elimination categories, were AI-drafted and
   explicitly have not been reviewed by a native Galician speaker.** Don't
   assume their wording/tone is correct; flag this if asked to touch them.
-  Also contains `TABLE_POSITION_PHRASES` — a SEPARATE dict (5 keys: See
-  "La Liga table position" above), NOT part of `PHRASES`/
-  `get_random_phrase()`, with no fixed-opener rule (these are trailing
-  sentences, not a result's own category) — use `get_random_table_phrase()`
-  for these instead, don't add them to `PHRASES` or route them through
-  `get_random_phrase()`.
+  Also contains `TABLE_POSITION_PHRASES` — a SEPARATE dict (see "La Liga
+  table position" above), NOT part of `PHRASES`/`get_random_phrase()`,
+  with no fixed-opener rule (these are trailing sentences, not a result's
+  own category). Nested two levels: 5 zone keys, each holding `WIN`/
+  `LOSS`/`DRAW` sub-lists (3 phrases each, 45 total) — use
+  `get_random_table_phrase(zone, outcome)` for these instead, don't add
+  them to `PHRASES` or route them through `get_random_phrase()` (wrong
+  shape — it expects a flat list, not a nested dict).
 - `state.json` — five fields: `last_processed_match_id`
   (football-data.org, check #1); `last_processed_thesportsdb_event_id` +
   `last_processed_thesportsdb_event_date` (TheSportsDB, check #2 — the

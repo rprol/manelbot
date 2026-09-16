@@ -283,51 +283,121 @@ def get_random_phrase(category):
 # above: they're an extra trailing sentence describing where Celta
 # currently sits in the La Liga table (see _la_liga_table_zone() and
 # _format_table_position_note() in main.py), added after EVERY La Liga
-# result regardless of win/draw/loss -- not a category picked for the
-# result itself, so they do NOT follow the "Ben, Celta, ben!"/"Regular,
-# Celta, regular!"/"Mal, Celta, mal!" fixed-opener rule that PHRASES'
-# categories do. Deliberately no position number in any of these -- just
-# the zone description.
+# result -- not a category picked for the result itself, so they do NOT
+# follow the "Ben, Celta, ben!"/"Regular, Celta, regular!"/"Mal, Celta,
+# mal!" fixed-opener rule that PHRASES' categories do. Deliberately no
+# position number in any of these -- just the zone description.
+#
+# Each zone has three tone variants, keyed by this match's own outcome:
+# "WIN" phrases lean optimistic (even a fairly ordinary table spot reads
+# more hopefully off the back of a win), "LOSS" phrases lean pessimistic
+# (even a decent spot reads more anxiously off the back of a loss), and
+# "DRAW" phrases stay neutral, just describing the zone. This is about
+# *tone*, not content -- the zone itself (which of the two is used to
+# pick from) still reflects the actual, current table position
+# independent of the outcome; see _format_table_position_note().
 TABLE_POSITION_PHRASES = {
     # Top LA_LIGA_EUROPEAN_POSITIONS.
-    "EUROPEAN": [
-        "O Celta segue instalado en posicións europeas.",
-        "O equipo celeste mantense entre os postos que dan acceso a Europa.",
-        "O Celta continúa na zona europea da táboa.",
-    ],
+    "EUROPEAN": {
+        "WIN": [
+            "O Celta reafírmase con forza en posicións europeas!",
+            "Vitoria que consolida ao Celta entre os mellores da táboa!",
+            "O soño europeo faise cada vez máis forte!",
+        ],
+        "LOSS": [
+            "Aínda en Europa, pero esta derrota acende as alarmas.",
+            "O posto europeo tambalea despois desta derrota.",
+            "Malos síntomas para un Celta que quere seguir en Europa.",
+        ],
+        "DRAW": [
+            "O Celta segue instalado en posicións europeas.",
+            "O equipo celeste mantense entre os postos que dan acceso a Europa.",
+            "O Celta continúa na zona europea da táboa.",
+        ],
+    },
     # Just below the European positions.
-    "NEAR_EUROPEAN": [
-        "O Celta achégase ás posicións europeas.",
-        "O equipo celeste está a un paso de entrar en Europa.",
-        "O Celta ronda a zona europea da clasificación.",
-    ],
+    "NEAR_EUROPEAN": {
+        "WIN": [
+            "O Celta cada vez está máis preto de entrar en Europa!",
+            "Vitoria que achega aínda máis ao Celta á zona europea!",
+            "O sprint cara Europa colle forza tras esta vitoria!",
+        ],
+        "LOSS": [
+            "Esta derrota aleixa ao Celta das posicións europeas.",
+            "Oportunidade perdida para achegarse a Europa.",
+            "O soño europeo compícase un pouco máis tras esta derrota.",
+        ],
+        "DRAW": [
+            "O Celta achégase ás posicións europeas.",
+            "O equipo celeste está a un paso de entrar en Europa.",
+            "O Celta ronda a zona europea da clasificación.",
+        ],
+    },
     # Comfortably clear of both zones.
-    "MID_TABLE": [
-        "O Celta segue instalado na zona media da táboa.",
-        "O equipo celeste mantense en terreo tranquilo na clasificación.",
-        "O Celta sitúase, por agora, lonxe tanto de Europa coma do descenso.",
-    ],
+    "MID_TABLE": {
+        "WIN": [
+            "Vitoria que reforza unha posición cómoda na táboa!",
+            "O Celta suma e mira cara arriba na clasificación!",
+            "Bo momento para un Celta instalado na zona media!",
+        ],
+        "LOSS": [
+            "O Celta segue na zona media, pero esta derrota non axuda.",
+            "Unha derrota que non compromete, pero tampouco axuda a medrar.",
+            "O equipo celeste estanca na zona media tras esta derrota.",
+        ],
+        "DRAW": [
+            "O Celta segue instalado na zona media da táboa.",
+            "O equipo celeste mantense en terreo tranquilo na clasificación.",
+            "O Celta sitúase, por agora, lonxe tanto de Europa coma do descenso.",
+        ],
+    },
     # Just above the relegation zone.
-    "NEAR_RELEGATION": [
-        "O Celta achégase perigosamente á zona de descenso.",
-        "O equipo celeste ronda uns postos baixos que preocupan.",
-        "O Celta bota unha ollada cara atrás, preto do descenso.",
-    ],
+    "NEAR_RELEGATION": {
+        "WIN": [
+            "Vitoria importante que afasta ao Celta da zona de descenso!",
+            "O Celta respira tras unha vitoria que sabe case a salvación!",
+            "Tres puntos clave para escapar dos postos baixos!",
+        ],
+        "LOSS": [
+            "Esta derrota achega perigosamente ao Celta á zona de descenso.",
+            "As alarmas soan cada vez máis forte para o Celta.",
+            "Derrota que deixa ao Celta a un paso do descenso.",
+        ],
+        "DRAW": [
+            "O Celta achégase perigosamente á zona de descenso.",
+            "O equipo celeste ronda uns postos baixos que preocupan.",
+            "O Celta bota unha ollada cara atrás, preto do descenso.",
+        ],
+    },
     # Bottom LA_LIGA_RELEGATION_ZONE_SIZE.
-    "RELEGATION": [
-        "O Celta segue instalado en posicións de descenso.",
-        "O equipo celeste continúa metido na zona vermella da táboa.",
-        "O Celta non sae dos postos de descenso.",
-    ],
+    "RELEGATION": {
+        "WIN": [
+            "Vitoria clave para comezar a saír da zona de descenso!",
+            "Un triunfo que devolve a esperanza na loita pola permanencia!",
+            "O Celta engánchase á loita pola permanencia tras esta vitoria!",
+        ],
+        "LOSS": [
+            "O Celta afúndese aínda máis nos postos de descenso.",
+            "Malos números que agravan a situación na zona vermella.",
+            "A crise na loita polo descenso non deixa de medrar.",
+        ],
+        "DRAW": [
+            "O Celta segue instalado en posicións de descenso.",
+            "O equipo celeste continúa metido na zona vermella da táboa.",
+            "O Celta non sae dos postos de descenso.",
+        ],
+    },
 }
 
 
-def get_random_table_phrase(zone):
+def get_random_table_phrase(zone, outcome):
     """
-    Return a random La Liga table-position sentence for the given zone.
+    Return a random La Liga table-position sentence for the given zone,
+    toned to match this match's own outcome (optimistic for a WIN,
+    pessimistic for a LOSS, neutral for a DRAW).
 
     zone must be one of the keys in TABLE_POSITION_PHRASES above -- see
     _la_liga_table_zone() in main.py for how a table position gets
-    mapped to one.
+    mapped to one. outcome must be "WIN", "LOSS", or "DRAW".
     """
-    return random.choice(TABLE_POSITION_PHRASES[zone])
+    return random.choice(TABLE_POSITION_PHRASES[zone][outcome])
