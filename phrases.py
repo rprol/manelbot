@@ -22,6 +22,13 @@
 # enrichment (goal/card timeline data) is available for that match -- see
 # fetch_thesportsdb_match_events() in main.py. Without it, matches fall
 # back to the half-time/full-time-only categories above/below as normal.
+#
+# *_STREAK_2/3 and WIN_ADVANCED_ROUND are chosen by select_category() in
+# main.py, not classify_match() -- they're about the competition/season
+# context around the match (a win/loss streak, advancing in a cup) rather
+# than this match's own shape, so they can override what would otherwise
+# be a WIN_STANDARD/LOSS_STANDARD result. See select_category()'s
+# docstring for exactly when each one wins out.
 
 import random
 
@@ -74,6 +81,34 @@ WIN_TEN_MEN_PHRASES = [
     "Ben, Celta, ben! Con un menos no campo e aínda así gañaron!",
     "Ben, Celta, ben! Que carácter, gañar cunha expulsión de por medio!",
     "Ben, Celta, ben! Dez homes bastaron para levar os tres puntos!",
+]
+
+# Second win in a row in the same competition (no other story to tell
+# about this particular match -- see select_category() in main.py).
+WIN_STREAK_2_PHRASES = [
+    "Ben, Celta, ben! Segunda vitoria consecutiva, o equipo colle ritmo!",
+    "Ben, Celta, ben! Dúas seguidas, e cada vez con máis confianza!",
+    "Ben, Celta, ben! O Celta encadea a súa segunda vitoria!",
+    "Ben, Celta, ben! Racha de dúas vitorias e a afección xa sorrí!",
+]
+
+# Third (or more) win in a row in the same competition.
+WIN_STREAK_3_PHRASES = [
+    "Ben, Celta, ben! Terceira vitoria consecutiva, o Celta está en racha!",
+    "Ben, Celta, ben! Xa van varias seguidas, isto é un gran momento!",
+    "Ben, Celta, ben! O bo momento non para, outra vitoria máis na racha!",
+    "Ben, Celta, ben! A racha triunfal continúa, que ben está o equipo!",
+]
+
+# A Copa del Rey win, which (in the current single-match, no-replay
+# format) always means advancing to the next round -- see
+# select_category() in main.py for why this doesn't apply to the Europa
+# League, whose format can't be read off a single match's result.
+WIN_ADVANCED_ROUND_PHRASES = [
+    "Ben, Celta, ben! O Celta avanza á seguinte rolda da copa!",
+    "Ben, Celta, ben! Segue vivo na copa, á próxima rolda!",
+    "Ben, Celta, ben! Billete para a seguinte eliminatoria conseguido!",
+    "Ben, Celta, ben! O soño copeiro continúa, á seguinte rolda!",
 ]
 
 # --- DRAW categories --------------------------------------------------------
@@ -164,6 +199,22 @@ LOSS_TEN_MEN_PHRASES = [
     "Mal, Celta, mal! Xogar con un menos pasou factura hoxe.",
 ]
 
+# Second loss in a row in the same competition.
+LOSS_STREAK_2_PHRASES = [
+    "Mal, Celta, mal! Segunda derrota consecutiva, malos tempos en Vigo.",
+    "Mal, Celta, mal! Dúas seguidas sen gañar, hai que reaccionar.",
+    "Mal, Celta, mal! O equipo encadea a súa segunda derrota.",
+    "Mal, Celta, mal! Van dúas derrotas seguidas, a preocupación medra.",
+]
+
+# Third (or more) loss in a row in the same competition.
+LOSS_STREAK_3_PHRASES = [
+    "Mal, Celta, mal! Terceira derrota consecutiva, momento moi delicado.",
+    "Mal, Celta, mal! Xa van varias seguidas sen gañar, preocupa e moito.",
+    "Mal, Celta, mal! A mala racha non para, outra derrota máis.",
+    "Mal, Celta, mal! A crise de resultados continúa, van xa varias caídas.",
+]
+
 # All phrase banks in one place, keyed by category. main.py's
 # classify_match() works out which key applies to a given match, and
 # get_random_phrase() below looks it up here.
@@ -174,6 +225,9 @@ PHRASES = {
     "WIN_STANDARD": WIN_STANDARD_PHRASES,
     "WIN_LATE": WIN_LATE_PHRASES,
     "WIN_TEN_MEN": WIN_TEN_MEN_PHRASES,
+    "WIN_STREAK_2": WIN_STREAK_2_PHRASES,
+    "WIN_STREAK_3": WIN_STREAK_3_PHRASES,
+    "WIN_ADVANCED_ROUND": WIN_ADVANCED_ROUND_PHRASES,
     "DRAW_RALLY": DRAW_RALLY_PHRASES,
     "DRAW_SQUANDERED": DRAW_SQUANDERED_PHRASES,
     "DRAW_FLAT": DRAW_FLAT_PHRASES,
@@ -184,6 +238,8 @@ PHRASES = {
     "LOSS_STANDARD": LOSS_STANDARD_PHRASES,
     "LOSS_LATE": LOSS_LATE_PHRASES,
     "LOSS_TEN_MEN": LOSS_TEN_MEN_PHRASES,
+    "LOSS_STREAK_2": LOSS_STREAK_2_PHRASES,
+    "LOSS_STREAK_3": LOSS_STREAK_3_PHRASES,
 }
 
 

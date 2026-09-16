@@ -58,6 +58,15 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.jso
 # for how those (and anything else) get covered instead, via TheSportsDB.
 COMPETITION_CODES = "PD,CL"
 
+# Human-readable competition names, keyed by football-data.org's code --
+# used as the `competition_key` passed to select_category() (see below),
+# so La Liga and Champions League results track their win/loss streaks
+# separately.
+COMPETITION_NAMES_BY_CODE = {
+    "PD": "La Liga",
+    "CL": "UEFA Champions League",
+}
+
 # football-data.org's numeric id for RC Celta de Vigo.
 #
 # NOTE: this is a best-guess default and has NOT been independently
@@ -499,6 +508,32 @@ def _classify_ten_men(red_cards, margin):
     return None
 
 
+def _celta_full_time_score(match, team_id):
+    """
+    Return (celta_ft, opponent_ft) -- Celta's and the opponent's full-time
+    goals -- from Celta's perspective, handling both home and away
+    matches. Shared by classify_match() and select_category() (via
+    _match_outcome()) so both agree on the same win/draw/loss reading of
+    a match without duplicating the home/away lookup.
+    """
+    team_id = int(team_id)
+    home_team = match["homeTeam"]
+    full_time = match["score"]["fullTime"]
+    celta_is_home = home_team.get("id") == team_id
+    if celta_is_home:
+        return full_time.get("home"), full_time.get("away")
+    return full_time.get("away"), full_time.get("home")
+
+
+def _match_outcome(margin):
+    """Return "WIN", "DRAW", or "LOSS" for a Celta full-time goal margin."""
+    if margin > 0:
+        return "WIN"
+    if margin < 0:
+        return "LOSS"
+    return "DRAW"
+
+
 def classify_match(match, team_id, goals=None, red_cards=None):
     """
     Work out not just WIN/DRAW/LOSS but the *shape* of the match from
@@ -506,6 +541,10 @@ def classify_match(match, team_id, goals=None, red_cards=None):
     full-time score. Handles both home and away matches. Returns one of
     the category keys in phrases.PHRASES, e.g. "WIN_COMEBACK",
     "LOSS_BLOWOUT", "DRAW_FLAT".
+
+    This only looks at THIS match -- see select_category() for how its
+    result gets combined with competition-level context (win/loss
+    streaks, cup advancement) into the category actually used.
 
     football-data.org's free tier doesn't give us minute-by-minute goal
     data, so on its own we can't detect things like a last-minute winner --
@@ -520,15 +559,13 @@ def classify_match(match, team_id, goals=None, red_cards=None):
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
-    full_time = match["score"]["fullTime"]
     half_time = match["score"].get("halfTime") or {}
 
+    celta_ft, opponent_ft = _celta_full_time_score(match, team_id)
     celta_is_home = home_team.get("id") == team_id
     if celta_is_home:
-        celta_ft, opponent_ft = full_time.get("home"), full_time.get("away")
         celta_ht, opponent_ht = half_time.get("home"), half_time.get("away")
     else:
-        celta_ft, opponent_ft = full_time.get("away"), full_time.get("home")
         celta_ht, opponent_ht = half_time.get("away"), half_time.get("home")
 
     margin = celta_ft - opponent_ft
@@ -573,6 +610,104 @@ def classify_match(match, team_id, goals=None, red_cards=None):
     if half_time_known and celta_ht > opponent_ht:
         return "DRAW_SQUANDERED"
     return "DRAW_FLAT"
+
+
+# Competitions where a single win always means advancing to the next round,
+# so select_category() can confidently override to WIN_ADVANCED_ROUND.
+# Spain's Copa del Rey has been straight single-match knockout (no
+# two-legged ties, no replays) since the 2019-20 format change, so a win
+# there unambiguously means advancing. The Europa League is NOT included --
+# it mixes a multi-matchday league phase (a single win/loss there doesn't
+# decide anything by itself) with mostly two-legged knockout rounds (a
+# single-leg win doesn't guarantee the aggregate tie), and TheSportsDB's
+# free-tier event data doesn't reliably tell us which phase/leg a given
+# match was -- confirmed live: the Sept 2026 Omonia Nicosia match came back
+# with "intRound": "1", which is a league-phase matchday number here, not a
+# knockout round. Guessing "advanced" anyway risks posting something
+# false, so this stays unhandled until there's a reliable way to tell.
+COMPETITIONS_WHERE_WIN_MEANS_ADVANCING = {"Copa del Rey"}
+
+
+def _update_streak(state, competition_key, outcome):
+    """
+    Update state["streaks"][competition_key] with this new result and
+    return the resulting streak length for `outcome`.
+
+    Only WIN and LOSS chains are tracked -- a DRAW (or a different
+    outcome than whatever streak was running) resets the streak back to
+    1 for the new outcome, or clears it out on a draw. Mutates `state` in
+    place; callers are responsible for calling save_state() afterwards
+    (same shared-state convention as check_la_liga_result()/
+    check_other_competitions_result() use for their own match/event id
+    keys -- see CLAUDE.md).
+
+    Returns the new streak length (always 1 right after a DRAW, or after
+    a WIN following a LOSS and vice versa) -- callers only act on this
+    when `outcome` is WIN or LOSS and the returned count is >= 2.
+    """
+    streaks = state.setdefault("streaks", {})
+    current = streaks.get(competition_key)
+
+    if current and current.get("outcome") == outcome:
+        new_count = current["count"] + 1
+    else:
+        new_count = 1
+
+    streaks[competition_key] = {"outcome": outcome, "count": new_count}
+    return new_count
+
+
+def select_category(match, team_id, goals, red_cards, competition_key, state):
+    """
+    Decide which phrases.py category this result should actually use.
+    Wraps classify_match() (the *shape of this one match* -- comeback,
+    blowout, late, ten-men, etc.) with two competition-level overrides,
+    checked in this order:
+
+      1. Cup advancement: in a competition from
+         COMPETITIONS_WHERE_WIN_MEANS_ADVANCING (currently just Copa del
+         Rey), a win always becomes WIN_ADVANCED_ROUND -- advancing (or
+         not) is bigger news than whether this particular win was a
+         comeback or a blowout, and it's true every single time, so it
+         takes over regardless of the match's own shape.
+      2. Win/loss streaks: WIN_STREAK_2/3 or LOSS_STREAK_2/3 replace
+         WIN_STANDARD/LOSS_STANDARD specifically -- i.e. only when
+         classify_match() found no more specific story of its own (not a
+         comeback, blowout, ten-men, or late-drama result). A comeback
+         win that also happens to be the 3rd in a row still reads as
+         WIN_COMEBACK; a bog-standard 1-0 win that's the 3rd in a row
+         reads as WIN_STREAK_3 instead of the blander WIN_STANDARD.
+         (This never actually fires for Copa del Rey wins in practice,
+         since rule 1 above already claims every one of those -- and a
+         Copa del Rey LOSS ends the run in that competition, so there's
+         never a same-competition loss streak to track there either.)
+
+    `competition_key` identifies the competition for streak-tracking
+    purposes (e.g. "La Liga", "UEFA Champions League", "Copa del Rey",
+    whatever TheSportsDB calls it) -- see COMPETITION_NAMES_BY_CODE for
+    check_la_liga_result()'s case and `strLeague` for check_other_
+    competitions_result()'s.
+
+    Always calls _update_streak() (mutating `state` in place) even when
+    its result isn't used for this category, so the streak count itself
+    stays accurate for next time. Callers must save `state` afterwards
+    exactly as they already do for their own match/event id key.
+    """
+    base_category = classify_match(match, team_id, goals, red_cards)
+
+    celta_ft, opponent_ft = _celta_full_time_score(match, team_id)
+    outcome = _match_outcome(celta_ft - opponent_ft)
+    streak_count = _update_streak(state, competition_key, outcome)
+
+    if outcome == "WIN" and competition_key in COMPETITIONS_WHERE_WIN_MEANS_ADVANCING:
+        return "WIN_ADVANCED_ROUND"
+
+    if base_category == "WIN_STANDARD" and streak_count >= 2:
+        return "WIN_STREAK_3" if streak_count >= 3 else "WIN_STREAK_2"
+    if base_category == "LOSS_STANDARD" and streak_count >= 2:
+        return "LOSS_STREAK_3" if streak_count >= 3 else "LOSS_STREAK_2"
+
+    return base_category
 
 
 def _format_celta_scorers(goals):
@@ -642,10 +777,15 @@ def _find_star_performer(goals):
     return (name, count) if count >= 2 else None
 
 
-def build_message(match, team_id, goals=None, red_cards=None, competition_name=None):
+def build_message(match, team_id, goals=None, red_cards=None, category_override=None):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
+
+    The message never mentions which competition the match was -- it's
+    the same phrase-and-score format no matter what (La Liga, Copa del
+    Rey, whatever); only the *content* of the phrase itself changes
+    (see category_override below).
 
     Teams are always shown in actual home-away order (Celta first when
     playing at home, second when playing away) so the score reads the
@@ -662,12 +802,14 @@ def build_message(match, team_id, goals=None, red_cards=None, competition_name=N
     Leave both as None (the default) to build the message exactly as
     before, with no extra detail.
 
-    If `competition_name` is given (used by check_other_competitions_result()
-    for anything that isn't La Liga/Champions League), the message is
-    prefixed with "[<competition_name>] " so it's clear at a glance this
-    isn't a league result -- e.g. "[Copa del Rey] Ben, Celta, ben! ...".
-    Leave it as None (the default, used for every La Liga/Champions League
-    message) to build the message with no prefix, exactly as before.
+    By default the category comes from classify_match() (the *shape of
+    this match* -- comeback, blowout, etc.), same as always. Pass
+    `category_override` (from select_category(), which additionally
+    knows about win/loss streaks and cup advancement -- see its
+    docstring) to use that category instead. check_la_liga_result() and
+    check_other_competitions_result() always pass one in; only
+    run_test_message()'s base-16-category fake matches rely on the
+    default.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -678,7 +820,7 @@ def build_message(match, team_id, goals=None, red_cards=None, competition_name=N
     home_name = "Celta" if celta_is_home else home_team.get("name", "o rival")
     away_name = away_team.get("name", "o rival") if celta_is_home else "Celta"
 
-    category = classify_match(match, team_id, goals, red_cards)
+    category = category_override or classify_match(match, team_id, goals, red_cards)
     phrase = get_random_phrase(category)
 
     result_line = f"{phrase} {home_name} {full_time.get('home')}-{full_time.get('away')} {away_name}"
@@ -691,9 +833,6 @@ def build_message(match, team_id, goals=None, red_cards=None, competition_name=N
     if star:
         name, count = star
         result_line = f"{result_line}. {name} leva {count} accións de gol hoxe!"
-
-    if competition_name:
-        result_line = f"[{competition_name}] {result_line}"
 
     return result_line
 
@@ -977,10 +1116,10 @@ FAKE_TEST_MATCHES = [
         "goals": None,
         "red_cards": [{"minute": 50, "player": "Carl Starfelt", "celta": True}],
     },
-    {  # Same as WIN_NARROW, but tagged as a Copa del Rey result -- exercises
-       # the "[competition_name]" message prefix that
-       # check_other_competitions_result() uses for anything football-data.org
-       # doesn't cover.
+    {  # WIN_STREAK_2: select_category() decides this from a win/loss
+       # history main.py doesn't have in test mode, so it's forced here via
+       # "category_override" instead of being inferred from the match itself
+       # (same underlying match shape as WIN_NARROW).
         "match": {
             "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
             "awayTeam": {"id": 617, "name": "SD Ponferradina"},
@@ -992,9 +1131,39 @@ FAKE_TEST_MATCHES = [
         },
         "goals": None,
         "red_cards": None,
-        "competition_name": "Copa del Rey",
+        "category_override": "WIN_STREAK_2",
     },
-    {  # Same as LOSS_STANDARD, but tagged as a Champions League result.
+    {  # WIN_STREAK_3
+        "match": {
+            "homeTeam": {"id": 619, "name": "CD Eldense"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 0, "away": 2},
+                "halfTime": {"home": 0, "away": 1},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "category_override": "WIN_STREAK_3",
+    },
+    {  # WIN_ADVANCED_ROUND: a Copa del Rey win, which always means
+       # advancing in the current single-match format -- see
+       # COMPETITIONS_WHERE_WIN_MEANS_ADVANCING.
+        "match": {
+            "homeTeam": {"id": 620, "name": "Real Avilés"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 0, "away": 1},
+                "halfTime": {"home": 0, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "category_override": "WIN_ADVANCED_ROUND",
+    },
+    {  # LOSS_STREAK_2
         "match": {
             "homeTeam": {"id": 618, "name": "Bayern Munich"},
             "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
@@ -1006,7 +1175,21 @@ FAKE_TEST_MATCHES = [
         },
         "goals": None,
         "red_cards": None,
-        "competition_name": "UEFA Champions League",
+        "category_override": "LOSS_STREAK_2",
+    },
+    {  # LOSS_STREAK_3
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 621, "name": "Paris Saint-Germain"},
+            "score": {
+                "winner": "AWAY_TEAM",
+                "fullTime": {"home": 0, "away": 2},
+                "halfTime": {"home": 0, "away": 1},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "category_override": "LOSS_STREAK_3",
     },
 ]
 
@@ -1037,7 +1220,7 @@ def run_test_message():
         DEFAULT_CELTA_TEAM_ID,
         fake_entry["goals"],
         fake_entry["red_cards"],
-        fake_entry.get("competition_name"),
+        fake_entry.get("category_override"),
     )
 
     successes = 0
@@ -1114,10 +1297,20 @@ def check_la_liga_result(
     goals = events["goals"] if events else None
     red_cards = events["red_cards"] if events else None
 
+    # Work out the final category -- classify_match()'s match-shape
+    # categories (comeback, blowout, ...), possibly overridden by a
+    # win/loss streak (see select_category()). Champions League never
+    # gets the cup-advancement override (COMPETITIONS_WHERE_WIN_MEANS_ADVANCING
+    # doesn't include it), only Copa del Rey does.
+    competition_key = COMPETITION_NAMES_BY_CODE.get(
+        latest_match.get("competition", {}).get("code"), "La Liga"
+    )
+    category = select_category(latest_match, celta_team_id, goals, red_cards, competition_key, state)
+
     # Build the message and post it to every configured channel. We try
     # all of them even if one fails, so a single broken channel doesn't
     # stop the others from getting posted.
-    message = build_message(latest_match, celta_team_id, goals, red_cards)
+    message = build_message(latest_match, celta_team_id, goals, red_cards, category)
     print(f"Posting new result: {message}")
 
     successes = 0
@@ -1163,10 +1356,14 @@ def check_other_competitions_result(
     free tier doesn't include at all (only La Liga and the Champions League
     do -- see COMPETITION_CODES above).
 
-    Mutates `state` in place, using a different key
-    (`last_processed_thesportsdb_event_id`) than check_la_liga_result()'s
-    `last_processed_match_id`, so the two checks track their own progress
-    independently in the same state.json without clobbering each other.
+    Mutates `state` in place, using different keys
+    (`last_processed_thesportsdb_event_id` + `last_processed_thesportsdb_
+    event_date`) than check_la_liga_result()'s `last_processed_match_id`,
+    so the two checks track their own progress independently in the same
+    state.json without clobbering each other. The date is stored
+    alongside the id so a stale/out-of-order response from
+    eventslast.php can't regress state backwards -- see the date check
+    below.
 
     Returns True only if a genuinely new, postable result failed to reach
     every Telegram channel (so main() can still exit non-zero), False
@@ -1183,7 +1380,9 @@ def check_other_competitions_result(
         return False
 
     event_id = latest_event.get("idEvent")
+    event_date = latest_event.get("dateEvent") or ""
     last_seen_event_id = state.get("last_processed_thesportsdb_event_id")
+    last_seen_event_date = state.get("last_processed_thesportsdb_event_date") or ""
 
     # First-run bootstrap, same reasoning as check_la_liga_result(): don't
     # post about a match that may have finished long before this check
@@ -1194,11 +1393,29 @@ def check_other_competitions_result(
             "as the starting point without posting."
         )
         state["last_processed_thesportsdb_event_id"] = event_id
+        state["last_processed_thesportsdb_event_date"] = event_date
         save_state(state)
         return False
 
     if event_id == last_seen_event_id:
         print("Latest TheSportsDB event has already been processed. Nothing to do.")
+        return False
+
+    # eventslast.php isn't reliably monotonic -- confirmed live on
+    # 2026-09-16: hours after it had shown a newer Europa League match
+    # (which we'd already processed), it reverted to showing the older La
+    # Liga match again. A different id here doesn't necessarily mean a
+    # genuinely new result -- only trust it if its date is actually after
+    # what we've already processed, so a stale/lagging response can't
+    # regress our state backwards (which would make us think a real,
+    # already-posted result is "new" again on some future run, and
+    # re-post it).
+    if event_date and last_seen_event_date and event_date <= last_seen_event_date:
+        print(
+            f"TheSportsDB's latest event ({event_id}, {event_date}) isn't newer than what "
+            f"we've already processed ({last_seen_event_id}, {last_seen_event_date}) -- "
+            "ignoring as likely stale/lagging data. Will check again next run."
+        )
         return False
 
     if latest_event.get("idLeague") in THESPORTSDB_LEAGUES_COVERED_BY_FOOTBALL_DATA:
@@ -1211,18 +1428,20 @@ def check_other_competitions_result(
             "match -- already handled by the football-data.org check. Marking as seen."
         )
         state["last_processed_thesportsdb_event_id"] = event_id
+        state["last_processed_thesportsdb_event_date"] = event_date
         save_state(state)
         return False
 
-    competition_name = latest_event.get("strLeague") or "outra competición"
-    print(f"New result detected via TheSportsDB: {competition_name}.")
+    competition_key = latest_event.get("strLeague") or "outra competición"
+    print(f"New result detected via TheSportsDB: {competition_key}.")
 
     timeline = _fetch_thesportsdb_timeline(event_id, thesportsdb_team_id, thesportsdb_api_key)
     goals = timeline["goals"] if timeline else None
     red_cards = timeline["red_cards"] if timeline else None
 
     synthetic_match = build_thesportsdb_match(latest_event, thesportsdb_team_id, goals)
-    message = build_message(synthetic_match, thesportsdb_team_id, goals, red_cards, competition_name)
+    category = select_category(synthetic_match, thesportsdb_team_id, goals, red_cards, competition_key, state)
+    message = build_message(synthetic_match, thesportsdb_team_id, goals, red_cards, category)
     print(f"Posting new result: {message}")
 
     successes = 0
@@ -1243,6 +1462,7 @@ def check_other_competitions_result(
         )
 
     state["last_processed_thesportsdb_event_id"] = event_id
+    state["last_processed_thesportsdb_event_date"] = event_date
     save_state(state)
     print("Done with other-competitions check.")
     return False

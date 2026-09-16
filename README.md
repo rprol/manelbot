@@ -56,12 +56,10 @@ Both checks work the same way:
 
      > Ben, Celta, ben! Ían perdendo e deron a volta ao marcador! Celta 2-1 Getafe
 
-     For anything that isn't La Liga/the Champions League, the competition
-     name is prefixed so it's clear at a glance, e.g.:
+     **The message never names the competition** -- it's the exact same
+     phrase-and-score format no matter what competition it was.
 
-     > [Copa del Rey] Ben, Celta, ben! Gañouse pola mínima, pero gañouse! Celta 1-0 Ponferradina
-
-   The categories (shared by both checks -- see `classify_match()` in
+   The base categories (shared by both checks -- see `classify_match()` in
    `main.py`):
    - **Win:** comeback (behind at half-time, won) · blowout (won by 3+) ·
      narrow (won by 1) · late (winning goal in the closing minutes) · ten
@@ -82,6 +80,12 @@ Both checks work the same way:
    drama" below. Without it, half-time vs full-time alone gives enough for
    every other category.
 
+   On top of that, `select_category()` (see "Streaks and cup advancement"
+   below) can swap a bland "standard" win/loss for a streak-aware phrase,
+   or a Copa del Rey win for an advancement phrase -- these take priority
+   over the base categories above in specific cases; see that section for
+   exactly when.
+
 3. `state.json` is updated with the new match/event id, and the GitHub
    Actions workflow commits that change back to the repo, so the next
    scheduled run knows this result was already posted.
@@ -93,11 +97,56 @@ posting about an old match the moment you first set the bot up (or the
 moment this multi-competition support is deployed to an existing bot).
 From the next new result onwards, it posts normally.
 
-**Known limitation:** extra-time/penalty-shootout knockout results (which
-Copa del Rey ties can go to) aren't specially handled -- classification
-uses TheSportsDB's regulation-time score, since how it represents a penalty
-shootout on the free tier hasn't been confirmed. Worth revisiting if this
-bot needs to cover a tie that goes to penalties.
+**Known limitations:**
+- Extra-time/penalty-shootout knockout results (which Copa del Rey ties
+  can go to) aren't specially handled -- classification uses TheSportsDB's
+  regulation-time score, since how it represents a penalty shootout on the
+  free tier hasn't been confirmed. Worth revisiting if this bot needs to
+  cover a tie that goes to penalties.
+- TheSportsDB's `eventslast.php` (the primary source for
+  `check_other_competitions_result()`) isn't always up to date -- it can
+  briefly show an older match again even after a newer one has finished
+  and already been posted. `state.json` stores the date of the last
+  processed event specifically to detect and ignore this, so it doesn't
+  cause a duplicate post once the endpoint catches up.
+
+## Streaks and cup advancement
+
+On top of each match's own shape, `select_category()` in `main.py` adds
+two more layers of context, each tracked **separately per competition**
+(a La Liga streak and a Champions League streak, for example, never mix):
+
+- **Win/loss streaks:** two or more wins (or losses) in a row in the same
+  competition get a streak-aware phrase instead of a bland "standard"
+  one, e.g.:
+
+  > Ben, Celta, ben! Terceira vitoria consecutiva, o Celta está en racha! Celta 1-0 Getafe
+
+  This only replaces the *standard* win/loss category -- a comeback,
+  blowout, late winner, or ten-men result keeps its own more specific
+  phrase even if it's also the 3rd win in a row, since that match's own
+  story is more specific than the streak. A draw (or the opposite result)
+  resets the streak back to zero.
+- **Cup advancement:** a **Copa del Rey** win always gets an
+  advancement-themed phrase instead, e.g.:
+
+  > Ben, Celta, ben! O Celta avanza á seguinte rolda da copa! Celta 1-0 Ponferradina
+
+  This is reliable specifically because Spain's cup has been strict
+  single-match knockout (no two-legged ties, no replays) since the
+  2019-20 format change -- a win there always means advancing, full stop,
+  so it takes priority over every other category for that competition.
+
+  **The Europa League deliberately does NOT get this treatment.** Its
+  format mixes a multi-matchday league phase (a single result doesn't
+  decide anything by itself) with mostly two-legged knockout rounds (a
+  single-leg win doesn't guarantee winning the tie), and TheSportsDB's
+  free-tier data doesn't reliably tell us which phase/leg a given match
+  was -- confirmed live: a real September 2026 Europa League match came
+  back tagged `"intRound": "1"`, which turned out to be a league-phase
+  matchday number, not a knockout round. Guessing "advanced" from a
+  single win risks posting something false, so this stays unhandled
+  until there's a reliable way to tell the phase/leg apart.
 
 ## Scorer names, standout players, and match drama
 
@@ -347,9 +396,9 @@ real using live data.
 | File | Purpose |
 |---|---|
 | `main.py` | The core script: two independent checks (La Liga/Champions League via football-data.org, everything else via TheSportsDB), each fetching match data, classifying the result into a category, posting to Telegram, and updating its own state. |
-| `phrases.py` | Galician phrase banks, one per category (16 total) -- edit freely. |
+| `phrases.py` | Galician phrase banks, one per category (21 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
-| `state.json` | Tracks the last match/event id each check posted, so results aren't duplicated. |
+| `state.json` | Tracks the last match/event id each check posted (plus per-competition win/loss streaks), so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |
 | `.github/workflows/check_result.yml` | The scheduled GitHub Actions workflow. |
 
