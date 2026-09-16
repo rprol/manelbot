@@ -175,6 +175,36 @@ context:
     as "advances to the next round" rather than "wins the trophy", since
     detecting that reliably has the same data limitations as above.
 
+## La Liga table position
+
+After a **La Liga** result specifically (not the Champions League -- a
+league table doesn't mean anything there), `check_la_liga_result()` asks
+football-data.org for the current table (confirmed live: its free tier
+includes a working `/v4/competitions/PD/standings` endpoint) and adds one
+more sentence if the new result leaves Celta in a notable spot:
+
+- A **win** that leaves Celta in a European qualification position (top 6,
+  `LA_LIGA_EUROPEAN_POSITIONS` in `main.py`):
+
+  > Ben, Celta, ben! Partido gañado con mérito! Celta 2-0 Getafe Con esta vitoria, o Celta métese en posicións europeas (posto 6)!
+
+- A **loss** that leaves Celta in the relegation zone (bottom 3,
+  `LA_LIGA_RELEGATION_ZONE_SIZE`):
+
+  > Mal, Celta, mal! Unha noite negra para os celestes. Celta 0-2 Sevilla FC Con esta derrota, o Celta cae en posicións de descenso (posto 19).
+
+A draw, or a win/loss outside those two zones, adds nothing extra -- this
+was deliberately scoped to just the two cases asked for, not "always
+mention the position." Like the TheSportsDB enrichment above, this fails
+safely: if the standings request fails for any reason, the result still
+posts normally, just without that extra sentence.
+
+**Known simplification:** "top 6 = European positions" is an
+approximation of Spain's actual qualification rules, which can shift a
+spot depending on cup-winner overlap with league position and UEFA's
+country coefficient ranking that season. Worth checking against the
+season's actual allocation if this ever looks off.
+
 ## Scorer names, standout players, and match drama
 
 football-data.org's free tier only gives half-time and full-time scores --

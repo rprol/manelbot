@@ -69,6 +69,18 @@ COMPETITION_NAMES_BY_CODE = {
     "CL": "UEFA Champions League",
 }
 
+# La Liga table-position thresholds used by _format_table_position_note()
+# to add extra context after a result -- see fetch_la_liga_standings().
+# La Liga has 20 teams. LA_LIGA_EUROPEAN_POSITIONS (top N) is a
+# simplification of Spain's actual European-qualification rules, which
+# can shift by a spot or two depending on cup-winner overlap and UEFA's
+# country coefficient ranking that season -- confirm against the current
+# season's actual allocation if this ever looks wrong.
+# LA_LIGA_RELEGATION_ZONE_SIZE (bottom N) is fixed by competition rules.
+LA_LIGA_TEAM_COUNT = 20
+LA_LIGA_EUROPEAN_POSITIONS = 6
+LA_LIGA_RELEGATION_ZONE_SIZE = 3
+
 # football-data.org's numeric id for RC Celta de Vigo.
 #
 # NOTE: this is a best-guess default and has NOT been independently
@@ -227,6 +239,84 @@ def fetch_recent_matches(api_key, team_id):
     # Sort newest first by kickoff date, so matches[0] is the latest match.
     matches.sort(key=lambda m: m.get("utcDate", ""), reverse=True)
     return matches
+
+
+def fetch_la_liga_standings(api_key):
+    """
+    Ask football-data.org for the current La Liga (PD) table.
+
+    Returns the list of table rows (each a dict with "position", "team",
+    etc., one per team), or None if the request failed for any reason --
+    never raises, same pattern as fetch_recent_matches(). This is only
+    ever called for a genuinely new La Liga result (not Champions
+    League -- a league table doesn't mean anything there), so it doesn't
+    add meaningfully to football-data.org's rate limit.
+    """
+    url = "https://api.football-data.org/v4/competitions/PD/standings"
+    headers = {"X-Auth-Token": api_key}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as error:
+        print(f"WARNING: request to football-data.org standings failed: {error}")
+        return None
+
+    if response.status_code != 200:
+        print(
+            f"WARNING: football-data.org standings returned status {response.status_code}: "
+            f"{response.text[:300]}"
+        )
+        return None
+
+    try:
+        data = response.json()
+    except ValueError as error:
+        print(f"WARNING: could not parse football-data.org standings response as JSON: {error}")
+        return None
+
+    # football-data.org can return more than one table per competition
+    # (e.g. home-only/away-only splits) -- "TOTAL" is the actual overall
+    # league table we want.
+    total_standings = next(
+        (s for s in data.get("standings", []) if s.get("type") == "TOTAL"), None
+    )
+    return total_standings.get("table", []) if total_standings else None
+
+
+def _find_team_position(table, team_id):
+    """
+    Return a team's current league position (an int) from a standings
+    table (as returned by fetch_la_liga_standings()), or None if the team
+    isn't in it (shouldn't normally happen, but data can be incomplete).
+    """
+    team_id = int(team_id)
+    for row in table:
+        if row.get("team", {}).get("id") == team_id:
+            return row.get("position")
+    return None
+
+
+def _format_table_position_note(outcome, position):
+    """
+    Build an extra Galician sentence noting a notable La Liga table
+    position after this result, or "" if there's nothing notable to add.
+
+    Only two cases are covered, matching what was asked for:
+      - A WIN that leaves Celta in a European qualification position
+        (top LA_LIGA_EUROPEAN_POSITIONS).
+      - A LOSS that leaves Celta in the relegation zone (bottom
+        LA_LIGA_RELEGATION_ZONE_SIZE).
+    A draw, or a win/loss outside those zones, returns "" -- this was
+    deliberately scoped to just the two cases asked for, not "mention the
+    position every time".
+    """
+    if position is None:
+        return ""
+    if outcome == "WIN" and position <= LA_LIGA_EUROPEAN_POSITIONS:
+        return f"Con esta vitoria, o Celta métese en posicións europeas (posto {position})!"
+    if outcome == "LOSS" and position > LA_LIGA_TEAM_COUNT - LA_LIGA_RELEGATION_ZONE_SIZE:
+        return f"Con esta derrota, o Celta cae en posicións de descenso (posto {position})."
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -860,7 +950,7 @@ def _find_star_performer(goals):
     return (name, count) if count >= 2 else None
 
 
-def build_message(match, team_id, goals=None, red_cards=None, category_override=None):
+def build_message(match, team_id, goals=None, red_cards=None, category_override=None, table_note=None):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
@@ -893,6 +983,13 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
     check_other_competitions_result() always pass one in; only
     run_test_message()'s base-16-category fake matches rely on the
     default.
+
+    `table_note` (from _format_table_position_note(), only ever passed by
+    check_la_liga_result() for an actual La Liga -- not Champions
+    League -- result) adds one more sentence noting a notable league
+    position, e.g. "Con esta vitoria, o Celta métese en posicións
+    europeas (posto 6)!". Leave it as None (the default) for no such
+    sentence.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -916,6 +1013,9 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
     if star:
         name, count = star
         result_line = f"{result_line}. {name} leva {count} accións de gol hoxe!"
+
+    if table_note:
+        result_line = f"{result_line} {table_note}"
 
     return result_line
 
@@ -1407,10 +1507,26 @@ def check_la_liga_result(
     )
     category = select_category(latest_match, celta_team_id, goals, red_cards, competition_key, state)
 
+    # For an actual La Liga result (not Champions League -- a league
+    # table doesn't mean anything there), check whether the new result
+    # leaves Celta in a notable table position (European positions on a
+    # win, the relegation zone on a loss) and add a sentence about it if
+    # so. Fails safely to no note at all, same as the TheSportsDB
+    # enrichment above -- a standings lookup failure never blocks posting
+    # the core result.
+    table_note = None
+    if competition_key == "La Liga":
+        standings = fetch_la_liga_standings(football_api_key)
+        if standings:
+            position = _find_team_position(standings, celta_team_id)
+            celta_ft, opponent_ft = _celta_full_time_score(latest_match, celta_team_id)
+            outcome = _match_outcome(celta_ft - opponent_ft)
+            table_note = _format_table_position_note(outcome, position)
+
     # Build the message and post it to every configured channel. We try
     # all of them even if one fails, so a single broken channel doesn't
     # stop the others from getting posted.
-    message = build_message(latest_match, celta_team_id, goals, red_cards, category)
+    message = build_message(latest_match, celta_team_id, goals, red_cards, category, table_note)
     print(f"Posting new result: {message}")
 
     successes = 0

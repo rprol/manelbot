@@ -93,8 +93,9 @@ unrelated league fixture, not a tie.
 The final category picks a random Galician phrase from `phrases.py` (22
 categories total now: the 16 above + `WIN_STREAK_2/3`, `LOSS_STREAK_2/3`,
 `WIN_ADVANCED_ROUND`, `LOSS_ELIMINATED`), and posts `{phrase} {home}
-{score} {away} ({scorer note}). {star performer note}` (teams in real
-home/away order; scorer/star notes only when timeline data was available)
+{score} {away} ({scorer note}). {star performer note} {table note}` (teams
+in real home/away order; scorer/star notes only when timeline data was
+available; the table note only for an actual La Liga result — see below)
 to Telegram. **The message never names the competition** — no `[Copa del
 Rey]`-style prefix; that was tried and explicitly removed. `competition_key`
 is used purely internally for the advancement default and the two-legged
@@ -102,6 +103,22 @@ lookup, never rendered. Each check then writes its own new id (and, for
 check #2, the event's date — see "known limitation" below) back to
 `state.json`, which the workflow commits back to the repo so state
 survives between runs.
+
+**La Liga table position** — `check_la_liga_result()` additionally calls
+`fetch_la_liga_standings()` (confirmed live: `/v4/competitions/PD/standings`
+works on the free tier) whenever `competition_key == "La Liga"` specifically
+(never for Champions League — a league table doesn't mean anything there).
+`_format_table_position_note()` adds one more sentence via `build_message()`'s
+`table_note` param, but ONLY for two cases: a WIN landing in the top
+`LA_LIGA_EUROPEAN_POSITIONS` (6 — a simplification of Spain's actual
+European-qualification rules, which can shift a spot depending on
+cup-winner overlap and UEFA coefficient ranking; confirm against the
+season's real allocation if this ever looks wrong), or a LOSS landing in
+the bottom `LA_LIGA_RELEGATION_ZONE_SIZE` (3, fixed by competition rules).
+A draw, or a win/loss outside those zones, adds nothing — deliberately
+scoped to just what was asked for. Fails safely to no note (never blocks
+posting) on any standings-fetch failure, same pattern as the TheSportsDB
+enrichment.
 
 **Known limitations:**
 - **A two-legged tie's *first* leg can't be identified in advance** —
@@ -196,7 +213,14 @@ multi-competition support is deployed to an already-running bot).
   above for all of this). `_format_celta_scorers()` builds the
   scorer-name clause (groups a brace/hat-trick under one player instead
   of repeating the name); `_find_star_performer()` finds a standout
-  player from goal+assist counts. `FAKE_TEST_MATCHES` has one hand-built
+  player from goal+assist counts. `fetch_la_liga_standings()` +
+  `_find_team_position()` + `_format_table_position_note()` are check #1's
+  La-Liga-only (never Champions League) table-position note — called
+  directly from `check_la_liga_result()`, not layered into
+  `select_category()`/`classify_match()` like everything else, since it
+  produces an extra sentence via `build_message()`'s `table_note` param
+  rather than picking a different phrases.py category. `FAKE_TEST_MATCHES`
+  has one hand-built
   `{"match": ..., "goals": ..., "red_cards": ..., "category_override":
   ...}` example per category (22 total). The base 16 rely on
   `category_override` being absent/`None`, so `build_message()` derives
