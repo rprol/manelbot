@@ -1024,8 +1024,10 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
     `table_note` (from _format_table_position_note(), only ever passed by
     check_la_liga_result() for an actual La Liga -- not Champions
     League -- result) adds one more sentence describing Celta's current
-    table position, e.g. "O Celta segue instalado en posicións
-    europeas.". Leave it as None (the default) for no such sentence.
+    table position, e.g. "... Celta 1-1 Sevilla FC. Achégase ás posicións
+    europeas." (a period is inserted first unless the line already ends
+    with "!"/"." from a star-performer sentence). Leave it as None (the
+    default) for no such sentence.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -1051,7 +1053,14 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
         result_line = f"{result_line}. {name} leva {count} accións de gol hoxe!"
 
     if table_note:
-        result_line = f"{result_line} {table_note}"
+        # result_line already ends with "!" if a star-performer sentence
+        # was added above -- only add our own separating period when it
+        # doesn't already have terminal punctuation (i.e. it's still just
+        # the bare score/scorer-note line), so we never end up with both
+        # ("...hoxe!." would be wrong; "...Sevilla FC. Achégase..." is
+        # what we actually want when there's no scorer/star note first).
+        separator = "" if result_line.endswith((".", "!")) else "."
+        result_line = f"{result_line}{separator} {table_note}"
 
     return result_line
 

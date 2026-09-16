@@ -332,7 +332,7 @@ TABLE_POSITION_PHRASES = {
             "O sprint cara Europa colle forza!",
         ],
         "LOSS": [
-            "Esta derrota aleixa ao Celta de Europa.",
+            "Esta derrota afasta ao Celta de Europa.",
             "Oportunidade perdida para achegarse á zona europea.",
             "O soño europeo compícase un pouco máis.",
         ],
