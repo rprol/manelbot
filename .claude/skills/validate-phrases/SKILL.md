@@ -50,6 +50,16 @@ missing category, a typo'd key, a phrase that forgot its required opener.
   their wording (an earlier `[competition]` prefix was tried and removed);
   a phrase naming one would be actively misleading when reused for a
   different competition.
+- Separately, `phrases.TABLE_POSITION_PHRASES` has exactly these 5 keys:
+  `EUROPEAN`, `NEAR_EUROPEAN`, `MID_TABLE`, `NEAR_RELEGATION`,
+  `RELEGATION` (matching `_la_liga_table_zone()`'s possible return values
+  in `main.py`) — this is a SEPARATE dict from `PHRASES`, used only for
+  the trailing La Liga table-position sentence, with NO fixed-opener rule
+  (these aren't a result's own category, just an appended sentence) and
+  no position number in the text (that was deliberately removed). No
+  category's list here should be empty either. Don't merge this into the
+  `expected_categories`/prefix check below — it's validated by the
+  separate block at the end of the script.
 
 ## Steps
 
@@ -57,7 +67,7 @@ missing category, a typo'd key, a phrase that forgot its required opener.
 
    ```bash
    python3 -c "
-   from phrases import PHRASES
+   from phrases import PHRASES, TABLE_POSITION_PHRASES
 
    expected_categories = {
        'WIN_COMEBACK', 'WIN_BLOWOUT', 'WIN_NARROW', 'WIN_STANDARD', 'WIN_LATE', 'WIN_TEN_MEN',
@@ -93,13 +103,25 @@ missing category, a typo'd key, a phrase that forgot its required opener.
            if not p.startswith(expected_prefix):
                problems.append(f'{category} phrase missing \"{expected_prefix}\" prefix: {p!r}')
 
+   expected_zones = {'EUROPEAN', 'NEAR_EUROPEAN', 'MID_TABLE', 'NEAR_RELEGATION', 'RELEGATION'}
+   missing_zones = expected_zones - TABLE_POSITION_PHRASES.keys()
+   extra_zones = TABLE_POSITION_PHRASES.keys() - expected_zones
+   if missing_zones:
+       problems.append(f'Missing table-position zones: {missing_zones}')
+   if extra_zones:
+       problems.append(f'Unexpected table-position zones (typo? not used by _la_liga_table_zone): {extra_zones}')
+   for zone, phrase_list in TABLE_POSITION_PHRASES.items():
+       if not phrase_list:
+           problems.append(f'{zone} (table-position) has zero phrases')
+
    if problems:
        print('FAILED:')
        for p in problems:
            print(f'  - {p}')
    else:
        total = sum(len(v) for v in PHRASES.values())
-       print(f'OK: {len(PHRASES)} categories, {total} phrases, all prefixes correct.')
+       table_total = sum(len(v) for v in TABLE_POSITION_PHRASES.values())
+       print(f'OK: {len(PHRASES)} categories ({total} phrases) + {len(TABLE_POSITION_PHRASES)} table-position zones ({table_total} phrases), all prefixes correct.')
    "
    ```
 

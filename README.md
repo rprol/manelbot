@@ -177,33 +177,54 @@ context:
 
 ## La Liga table position
 
-After a **La Liga** result specifically (not the Champions League -- a
-league table doesn't mean anything there), `check_la_liga_result()` asks
-football-data.org for the current table (confirmed live: its free tier
-includes a working `/v4/competitions/PD/standings` endpoint) and adds one
-more sentence if the new result leaves Celta in a notable spot:
+After **every** La Liga result specifically (not the Champions League --
+a league table doesn't mean anything there), `check_la_liga_result()`
+asks football-data.org for the current table (confirmed live: its free
+tier includes a working `/v4/competitions/PD/standings` endpoint) and
+adds a sentence describing where Celta currently stands -- this is
+ongoing context about the team's season, not something caused by this
+particular result, so it's independent of whether this match was a
+win/draw/loss. There are five zones (`_la_liga_table_zone()` in
+`main.py`):
 
-- A **win** that leaves Celta in a European qualification position (top 6,
-  `LA_LIGA_EUROPEAN_POSITIONS` in `main.py`):
+- **European positions** (top 6, `LA_LIGA_EUROPEAN_POSITIONS`):
 
-  > Ben, Celta, ben! Partido gañado con mérito! Celta 2-0 Getafe Con esta vitoria, o Celta métese en posicións europeas (posto 6)!
+  > ... O Celta segue instalado en posicións europeas.
 
-- A **loss** that leaves Celta in the relegation zone (bottom 3,
-  `LA_LIGA_RELEGATION_ZONE_SIZE`):
+- **Approaching European positions** (the next `LA_LIGA_APPROACHING_MARGIN`
+  spots below that, 3 by default):
 
-  > Mal, Celta, mal! Unha noite negra para os celestes. Celta 0-2 Sevilla FC Con esta derrota, o Celta cae en posicións de descenso (posto 19).
+  > ... O Celta achégase ás posicións europeas.
 
-A draw, or a win/loss outside those two zones, adds nothing extra -- this
-was deliberately scoped to just the two cases asked for, not "always
-mention the position." Like the TheSportsDB enrichment above, this fails
-safely: if the standings request fails for any reason, the result still
-posts normally, just without that extra sentence.
+- **Mid-table** (comfortably clear of both zones):
 
-**Known simplification:** "top 6 = European positions" is an
-approximation of Spain's actual qualification rules, which can shift a
-spot depending on cup-winner overlap with league position and UEFA's
-country coefficient ranking that season. Worth checking against the
-season's actual allocation if this ever looks off.
+  > ... O Celta segue instalado na zona media da táboa.
+
+- **Approaching the relegation zone** (the `LA_LIGA_APPROACHING_MARGIN`
+  spots above it):
+
+  > ... O Celta achégase perigosamente á zona de descenso.
+
+- **Relegation zone** (bottom 3, `LA_LIGA_RELEGATION_ZONE_SIZE`):
+
+  > ... O Celta segue instalado en posicións de descenso.
+
+No position number is included -- just the zone description. Like the
+TheSportsDB enrichment above, this fails safely: if the standings request
+fails for any reason, the result still posts normally, just without that
+extra sentence.
+
+**Known simplifications:**
+- "Top 6 = European positions" approximates Spain's actual qualification
+  rules, which can shift a spot depending on cup-winner overlap with
+  league position and UEFA's country coefficient ranking that season.
+  Worth checking against the season's actual allocation if this ever
+  looks off.
+- "Approaching" a zone is based purely on table position (a fixed number
+  of places away), not points -- a team can be a few places above the
+  relegation zone but genuinely safe on points, or vice versa. This is
+  meant as casual color commentary, not a precise permanence/danger
+  metric.
 
 ## Scorer names, standout players, and match drama
 
@@ -216,22 +237,24 @@ primary source -- see "How it works" above -- so its timeline is used
 directly, not as a lookup on top of another source). If it finds the
 matching event:
 
-- **Celta's scorer(s) and goal minute(s)** get appended to the message,
-  e.g.:
+- **Celta's scorer(s)** get appended to the message in natural language --
+  no goal minutes, just who scored (and, for a brace/hat-trick, how
+  many), e.g.:
 
-  > Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe (marcou Iago Aspas (min. 23))
+  > Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe (marcou Iago Aspas)
 
 - If the decisive goal was scored in the closing minutes (from minute 85
-  onwards), the match is classified as `WIN_LATE`, `DRAW_LATE`, or
-  `LOSS_LATE` instead of its usual category, using a phrase that reflects
-  the late drama.
+  onwards -- this still uses the underlying minute data internally, it's
+  just not shown in the message text), the match is classified as
+  `WIN_LATE`, `DRAW_LATE`, or `LOSS_LATE` instead of its usual category,
+  using a phrase that reflects the late drama.
 - If a Celta player was sent off (red card) and the match was still won or
   lost, it's classified as `WIN_TEN_MEN` or `LOSS_TEN_MEN` instead.
 - If any Celta player was involved in **2 or more goals** this match
   (their own goals plus assists they set up for teammates), they get
   called out by name as the standout performer, e.g.:
 
-  > ... Celta 2-1 Getafe (marcou Iago Aspas (min. 23, min. 80)). Iago Aspas leva 2 accións de gol hoxe!
+  > ... Celta 2-1 Getafe (marcou Iago Aspas, cun dobrete). Iago Aspas leva 2 accións de gol hoxe!
 
   This is the most honest signal the data can support for "who had a
   great match" -- there's no official man-of-the-match or player-rating

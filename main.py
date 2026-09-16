@@ -39,7 +39,7 @@ import sys
 
 import requests
 
-from phrases import get_random_phrase
+from phrases import get_random_phrase, get_random_table_phrase
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -69,17 +69,24 @@ COMPETITION_NAMES_BY_CODE = {
     "CL": "UEFA Champions League",
 }
 
-# La Liga table-position thresholds used by _format_table_position_note()
-# to add extra context after a result -- see fetch_la_liga_standings().
+# La Liga table-position thresholds used by _la_liga_table_zone() to add
+# extra context after every La Liga result -- see fetch_la_liga_standings().
 # La Liga has 20 teams. LA_LIGA_EUROPEAN_POSITIONS (top N) is a
 # simplification of Spain's actual European-qualification rules, which
 # can shift by a spot or two depending on cup-winner overlap and UEFA's
 # country coefficient ranking that season -- confirm against the current
 # season's actual allocation if this ever looks wrong.
 # LA_LIGA_RELEGATION_ZONE_SIZE (bottom N) is fixed by competition rules.
+# LA_LIGA_APPROACHING_MARGIN is our own simplification for "close to" one
+# of those zones -- a position-count proxy, not a points-based one (which
+# would need each team's actual points, not just their rank), so it can
+# call a team "approaching" the relegation zone even if they're
+# comfortably clear of it on points but happen to sit a few places above
+# it. Good enough for casual color commentary, not a precise metric.
 LA_LIGA_TEAM_COUNT = 20
 LA_LIGA_EUROPEAN_POSITIONS = 6
 LA_LIGA_RELEGATION_ZONE_SIZE = 3
+LA_LIGA_APPROACHING_MARGIN = 3
 
 # football-data.org's numeric id for RC Celta de Vigo.
 #
@@ -296,27 +303,46 @@ def _find_team_position(table, team_id):
     return None
 
 
-def _format_table_position_note(outcome, position):
+def _la_liga_table_zone(position):
     """
-    Build an extra Galician sentence noting a notable La Liga table
-    position after this result, or "" if there's nothing notable to add.
+    Classify a La Liga position into one of five zones, from Celta's
+    perspective: "EUROPEAN", "NEAR_EUROPEAN", "MID_TABLE",
+    "NEAR_RELEGATION", or "RELEGATION". These five are exhaustive --
+    every position 1..LA_LIGA_TEAM_COUNT falls into exactly one -- so
+    this always returns something, regardless of result.
+    """
+    if position <= LA_LIGA_EUROPEAN_POSITIONS:
+        return "EUROPEAN"
+    if position <= LA_LIGA_EUROPEAN_POSITIONS + LA_LIGA_APPROACHING_MARGIN:
+        return "NEAR_EUROPEAN"
 
-    Only two cases are covered, matching what was asked for:
-      - A WIN that leaves Celta in a European qualification position
-        (top LA_LIGA_EUROPEAN_POSITIONS).
-      - A LOSS that leaves Celta in the relegation zone (bottom
-        LA_LIGA_RELEGATION_ZONE_SIZE).
-    A draw, or a win/loss outside those zones, returns "" -- this was
-    deliberately scoped to just the two cases asked for, not "mention the
-    position every time".
+    relegation_start = LA_LIGA_TEAM_COUNT - LA_LIGA_RELEGATION_ZONE_SIZE + 1
+    if position >= relegation_start:
+        return "RELEGATION"
+    if position >= relegation_start - LA_LIGA_APPROACHING_MARGIN:
+        return "NEAR_RELEGATION"
+
+    return "MID_TABLE"
+
+
+def _format_table_position_note(position):
+    """
+    Build an extra Galician sentence describing Celta's current La Liga
+    table position, or "" if the position is unknown (a standings lookup
+    failure -- see fetch_la_liga_standings()).
+
+    Deliberately independent of whether this particular result was a
+    win/draw/loss -- it's ongoing context about where the team stands
+    ("still in Europe", "approaching the relegation zone", ...), not
+    something this one result caused, so it's added after every La Liga
+    result rather than gated to specific outcomes. Picks a random phrase
+    from phrases.TABLE_POSITION_PHRASES for whichever zone
+    _la_liga_table_zone() returns -- no position number is included in
+    the phrase itself, just the zone description.
     """
     if position is None:
         return ""
-    if outcome == "WIN" and position <= LA_LIGA_EUROPEAN_POSITIONS:
-        return f"Con esta vitoria, o Celta métese en posicións europeas (posto {position})!"
-    if outcome == "LOSS" and position > LA_LIGA_TEAM_COUNT - LA_LIGA_RELEGATION_ZONE_SIZE:
-        return f"Con esta derrota, o Celta cae en posicións de descenso (posto {position})."
-    return ""
+    return get_random_table_phrase(_la_liga_table_zone(position))
 
 
 # ---------------------------------------------------------------------------
@@ -885,13 +911,13 @@ def select_category(match, team_id, goals, red_cards, competition_key, state):
 
 def _format_celta_scorers(goals):
     """
-    Build a short Galician clause naming Celta's scorer(s) and the
-    minute(s) each of their goals went in. Goals are grouped by player so
-    a brace/hat-trick reads as one clause -- e.g. "marcou Iago Aspas
-    (min. 23, min. 80)" -- instead of repeating the name. For more than
-    one scorer: "marcaron Iago Aspas (min. 23) e Ferran Jutglà (min. 78)".
-    Returns "" (nothing to add) if there's no goal data or Celta didn't
-    score.
+    Build a short, natural-sounding Galician clause naming Celta's
+    scorer(s) this match -- just who scored, no goal minutes. Goals are
+    grouped by player so a brace/hat-trick reads as one clause naming how
+    many, e.g. "marcou Iago Aspas, cun dobrete" (brace) or "cun triplete"
+    (hat-trick) -- instead of repeating the name or listing minutes. For
+    more than one scorer: "marcaron Iago Aspas e Ferran Jutglà". Returns
+    "" (nothing to add) if there's no goal data or Celta didn't score.
     """
     if not goals:
         return ""
@@ -900,17 +926,23 @@ def _format_celta_scorers(goals):
     if not celta_goals:
         return ""
 
-    minutes_by_scorer = {}
+    goal_counts = {}
     scorer_order = []
     for g in celta_goals:
-        if g["scorer"] not in minutes_by_scorer:
-            minutes_by_scorer[g["scorer"]] = []
+        if g["scorer"] not in goal_counts:
+            goal_counts[g["scorer"]] = 0
             scorer_order.append(g["scorer"])
-        minutes_by_scorer[g["scorer"]].append(g["minute"])
+        goal_counts[g["scorer"]] += 1
 
     def describe(scorer):
-        minutes = ", ".join(f"min. {m}" for m in minutes_by_scorer[scorer])
-        return f"{scorer} ({minutes})"
+        count = goal_counts[scorer]
+        if count == 2:
+            return f"{scorer}, cun dobrete"
+        if count == 3:
+            return f"{scorer}, cun triplete"
+        if count >= 4:
+            return f"{scorer}, con {count} goles"
+        return scorer
 
     if len(scorer_order) == 1:
         return f"marcou {describe(scorer_order[0])}"
@@ -971,7 +1003,7 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
     the message: Celta's scorer(s) in parentheses, plus a follow-up
     sentence naming a standout player if anyone had 2+ goal contributions
     (goals + assists) -- see _find_star_performer(). E.g.:
-    "... Celta 2-1 Getafe (marcou Iago Aspas (min. 23, min. 80)). Iago Aspas leva 2 accións de gol hoxe!"
+    "... Celta 2-1 Getafe (marcou Iago Aspas, cun dobrete). Iago Aspas leva 2 accións de gol hoxe!"
     Leave both as None (the default) to build the message exactly as
     before, with no extra detail.
 
@@ -986,10 +1018,9 @@ def build_message(match, team_id, goals=None, red_cards=None, category_override=
 
     `table_note` (from _format_table_position_note(), only ever passed by
     check_la_liga_result() for an actual La Liga -- not Champions
-    League -- result) adds one more sentence noting a notable league
-    position, e.g. "Con esta vitoria, o Celta métese en posicións
-    europeas (posto 6)!". Leave it as None (the default) for no such
-    sentence.
+    League -- result) adds one more sentence describing Celta's current
+    table position, e.g. "O Celta segue instalado en posicións
+    europeas.". Leave it as None (the default) for no such sentence.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -1508,20 +1539,18 @@ def check_la_liga_result(
     category = select_category(latest_match, celta_team_id, goals, red_cards, competition_key, state)
 
     # For an actual La Liga result (not Champions League -- a league
-    # table doesn't mean anything there), check whether the new result
-    # leaves Celta in a notable table position (European positions on a
-    # win, the relegation zone on a loss) and add a sentence about it if
-    # so. Fails safely to no note at all, same as the TheSportsDB
-    # enrichment above -- a standings lookup failure never blocks posting
-    # the core result.
+    # table doesn't mean anything there), add a sentence about Celta's
+    # current table position (European positions, mid-table, relegation
+    # zone, or approaching either edge -- see _la_liga_table_zone()).
+    # Fails safely to no note at all, same as the TheSportsDB enrichment
+    # above -- a standings lookup failure never blocks posting the core
+    # result.
     table_note = None
     if competition_key == "La Liga":
         standings = fetch_la_liga_standings(football_api_key)
         if standings:
             position = _find_team_position(standings, celta_team_id)
-            celta_ft, opponent_ft = _celta_full_time_score(latest_match, celta_team_id)
-            outcome = _match_outcome(celta_ft - opponent_ft)
-            table_note = _format_table_position_note(outcome, position)
+            table_note = _format_table_position_note(position)
 
     # Build the message and post it to every configured channel. We try
     # all of them even if one fails, so a single broken channel doesn't

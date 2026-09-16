@@ -275,3 +275,59 @@ def get_random_phrase(category):
     classify_match() in main.py for how a match gets mapped to one.
     """
     return random.choice(PHRASES[category])
+
+
+# --- La Liga table-position phrases -----------------------------------------
+#
+# These are a completely separate system from PHRASES/get_random_phrase()
+# above: they're an extra trailing sentence describing where Celta
+# currently sits in the La Liga table (see _la_liga_table_zone() and
+# _format_table_position_note() in main.py), added after EVERY La Liga
+# result regardless of win/draw/loss -- not a category picked for the
+# result itself, so they do NOT follow the "Ben, Celta, ben!"/"Regular,
+# Celta, regular!"/"Mal, Celta, mal!" fixed-opener rule that PHRASES'
+# categories do. Deliberately no position number in any of these -- just
+# the zone description.
+TABLE_POSITION_PHRASES = {
+    # Top LA_LIGA_EUROPEAN_POSITIONS.
+    "EUROPEAN": [
+        "O Celta segue instalado en posicións europeas.",
+        "O equipo celeste mantense entre os postos que dan acceso a Europa.",
+        "O Celta continúa na zona europea da táboa.",
+    ],
+    # Just below the European positions.
+    "NEAR_EUROPEAN": [
+        "O Celta achégase ás posicións europeas.",
+        "O equipo celeste está a un paso de entrar en Europa.",
+        "O Celta ronda a zona europea da clasificación.",
+    ],
+    # Comfortably clear of both zones.
+    "MID_TABLE": [
+        "O Celta segue instalado na zona media da táboa.",
+        "O equipo celeste mantense en terreo tranquilo na clasificación.",
+        "O Celta sitúase, por agora, lonxe tanto de Europa coma do descenso.",
+    ],
+    # Just above the relegation zone.
+    "NEAR_RELEGATION": [
+        "O Celta achégase perigosamente á zona de descenso.",
+        "O equipo celeste ronda uns postos baixos que preocupan.",
+        "O Celta bota unha ollada cara atrás, preto do descenso.",
+    ],
+    # Bottom LA_LIGA_RELEGATION_ZONE_SIZE.
+    "RELEGATION": [
+        "O Celta segue instalado en posicións de descenso.",
+        "O equipo celeste continúa metido na zona vermella da táboa.",
+        "O Celta non sae dos postos de descenso.",
+    ],
+}
+
+
+def get_random_table_phrase(zone):
+    """
+    Return a random La Liga table-position sentence for the given zone.
+
+    zone must be one of the keys in TABLE_POSITION_PHRASES above -- see
+    _la_liga_table_zone() in main.py for how a table position gets
+    mapped to one.
+    """
+    return random.choice(TABLE_POSITION_PHRASES[zone])

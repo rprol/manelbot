@@ -108,17 +108,25 @@ survives between runs.
 `fetch_la_liga_standings()` (confirmed live: `/v4/competitions/PD/standings`
 works on the free tier) whenever `competition_key == "La Liga"` specifically
 (never for Champions League — a league table doesn't mean anything there).
-`_format_table_position_note()` adds one more sentence via `build_message()`'s
-`table_note` param, but ONLY for two cases: a WIN landing in the top
-`LA_LIGA_EUROPEAN_POSITIONS` (6 — a simplification of Spain's actual
-European-qualification rules, which can shift a spot depending on
-cup-winner overlap and UEFA coefficient ranking; confirm against the
-season's real allocation if this ever looks wrong), or a LOSS landing in
-the bottom `LA_LIGA_RELEGATION_ZONE_SIZE` (3, fixed by competition rules).
-A draw, or a win/loss outside those zones, adds nothing — deliberately
-scoped to just what was asked for. Fails safely to no note (never blocks
+`_la_liga_table_zone()` classifies the position into one of five
+EXHAUSTIVE zones — `EUROPEAN` (top `LA_LIGA_EUROPEAN_POSITIONS`, 6),
+`NEAR_EUROPEAN`, `MID_TABLE`, `NEAR_RELEGATION`, `RELEGATION` (bottom
+`LA_LIGA_RELEGATION_ZONE_SIZE`, 3) — with `LA_LIGA_APPROACHING_MARGIN`
+(3) controlling how many places count as "near" either edge; every
+position falls into exactly one. `_format_table_position_note()` then
+picks a random phrase for that zone from `phrases.TABLE_POSITION_PHRASES`
+(a completely separate phrase system from `PHRASES`/`get_random_phrase()`
+— no fixed-opener rule, no position number in the text) and adds it via
+`build_message()`'s `table_note` param. **Deliberately independent of
+win/draw/loss** — added after every La Liga result, not gated to specific
+outcomes, since it's ongoing season context rather than something this
+result caused (an earlier version only fired on a WIN reaching Europe or
+a LOSS in the relegation zone, with the position number in the text —
+both were deliberately changed). Fails safely to no note (never blocks
 posting) on any standings-fetch failure, same pattern as the TheSportsDB
-enrichment.
+enrichment. "Approaching" is a position-count proxy, not points-based —
+documented as a known simplification, same as the European-positions
+cutoff itself.
 
 **Known limitations:**
 - **A two-legged tie's *first* leg can't be identified in advance** —
@@ -212,15 +220,20 @@ multi-competition support is deployed to an already-running bot).
   the same-opponent-rematch aggregate-score override (see "How it works"
   above for all of this). `_format_celta_scorers()` builds the
   scorer-name clause (groups a brace/hat-trick under one player instead
-  of repeating the name); `_find_star_performer()` finds a standout
-  player from goal+assist counts. `fetch_la_liga_standings()` +
-  `_find_team_position()` + `_format_table_position_note()` are check #1's
+  of repeating the name, e.g. "cun dobrete"/"cun triplete" — deliberately
+  no goal minutes in the displayed text, even though `goals[i]["minute"]`
+  itself still drives `_classify_late_drama()`); `_find_star_performer()`
+  finds a standout player from goal+assist counts.
+  `fetch_la_liga_standings()` + `_find_team_position()` +
+  `_la_liga_table_zone()` + `_format_table_position_note()` are check #1's
   La-Liga-only (never Champions League) table-position note — called
   directly from `check_la_liga_result()`, not layered into
   `select_category()`/`classify_match()` like everything else, since it
   produces an extra sentence via `build_message()`'s `table_note` param
-  rather than picking a different phrases.py category. `FAKE_TEST_MATCHES`
-  has one hand-built
+  rather than picking a different phrases.py category, and (unlike every
+  other override in this file) is deliberately independent of the
+  match's own WIN/DRAW/LOSS outcome. `FAKE_TEST_MATCHES` has one
+  hand-built
   `{"match": ..., "goals": ..., "red_cards": ..., "category_override":
   ...}` example per category (22 total). The base 16 rely on
   `category_override` being absent/`None`, so `build_message()` derives
@@ -254,6 +267,12 @@ multi-competition support is deployed to an already-running bot).
   streak/advancement/elimination categories, were AI-drafted and
   explicitly have not been reviewed by a native Galician speaker.** Don't
   assume their wording/tone is correct; flag this if asked to touch them.
+  Also contains `TABLE_POSITION_PHRASES` — a SEPARATE dict (5 keys: See
+  "La Liga table position" above), NOT part of `PHRASES`/
+  `get_random_phrase()`, with no fixed-opener rule (these are trailing
+  sentences, not a result's own category) — use `get_random_table_phrase()`
+  for these instead, don't add them to `PHRASES` or route them through
+  `get_random_phrase()`.
 - `state.json` — five fields: `last_processed_match_id`
   (football-data.org, check #1); `last_processed_thesportsdb_event_id` +
   `last_processed_thesportsdb_event_date` (TheSportsDB, check #2 — the
