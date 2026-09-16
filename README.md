@@ -1,6 +1,7 @@
 # Manel Bot 🔵⚪
 
-A small Telegram bot that watches for Celta de Vigo's La Liga results and
+A small Telegram bot that watches for Celta de Vigo's results -- La Liga,
+the Champions League, Copa del Rey, the Europa League, anything -- and
 posts a reaction message to a Telegram channel -- in Galician -- whenever a
 match finishes.
 
@@ -26,22 +27,42 @@ just editing text.
 
 ## How it works
 
-1. `main.py` reads `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID`,
-   `FOOTBALL_DATA_API_KEY`, and `CELTA_TEAM_ID` from environment variables.
-2. It asks [football-data.org](https://www.football-data.org/) for Celta's
-   most recent *finished* La Liga matches.
-3. It compares the latest finished match's id against the one saved in
-   `state.json`.
-   - If it's the same, nothing happened since last time -- the script exits
-     quietly.
-   - If it's different, that's a new result: the script compares the
-     half-time score to the full-time score to work out not just
-     WIN/DRAW/LOSS but the *shape* of the match, picks a random Galician
-     phrase matching that from `phrases.py`, and posts a message like:
+`main.py` runs two independent checks every time it's invoked, because no
+single free API covers everything Celta might play:
+
+- **`check_la_liga_result()`** -- La Liga and the Champions League, via
+  [football-data.org](https://www.football-data.org/). These are the only
+  two competitions Celta could play in that football-data.org's *free* tier
+  actually includes (confirmed against the live API -- Copa del Rey and the
+  Europa League both return a 403 "check your subscription").
+- **`check_other_competitions_result()`** -- everything else (Copa del Rey,
+  the Europa League, the Conference League, ...), via
+  [TheSportsDB](https://www.thesportsdb.com/), which covers any competition.
+  It looks up Celta's actual latest finished match with no competition
+  filter at all, and skips it if that turns out to be a La Liga/Champions
+  League match -- those are already handled (with richer data) by the check
+  above, so it's never posted twice.
+
+Both checks work the same way:
+
+1. Fetch Celta's latest finished match from their respective data source.
+2. Compare its id against the one saved in `state.json` (each check uses
+   its own key, so they don't interfere with each other).
+   - If it's the same, nothing happened since last time for that check --
+     it exits quietly.
+   - If it's different, that's a new result: work out not just WIN/DRAW/LOSS
+     but the *shape* of the match, pick a random Galician phrase matching
+     that from `phrases.py`, and post a message like:
 
      > Ben, Celta, ben! Ían perdendo e deron a volta ao marcador! Celta 2-1 Getafe
 
-   The categories are (see `classify_match()` in `main.py`):
+     For anything that isn't La Liga/the Champions League, the competition
+     name is prefixed so it's clear at a glance, e.g.:
+
+     > [Copa del Rey] Ben, Celta, ben! Gañouse pola mínima, pero gañouse! Celta 1-0 Ponferradina
+
+   The categories (shared by both checks -- see `classify_match()` in
+   `main.py`):
    - **Win:** comeback (behind at half-time, won) · blowout (won by 3+) ·
      narrow (won by 1) · late (winning goal in the closing minutes) · ten
      men (won despite a Celta player being sent off) · standard (anything
@@ -56,28 +77,38 @@ just editing text.
      (anything else)
 
    The "late" and "ten men" categories, plus scorer names and a
-   standout-player callout in the posted message, come from a second data
-   source -- see "Scorer names and late-goal drama" below. Without it,
-   football-data.org alone gives enough (via half-time vs full-time) for
+   standout-player callout in the posted message, come from TheSportsDB's
+   goal-by-goal timeline -- see "Scorer names, standout players, and match
+   drama" below. Without it, half-time vs full-time alone gives enough for
    every other category.
 
-4. `state.json` is updated with the new match id, and the GitHub Actions
-   workflow commits that change back to the repo, so the next scheduled run
-   knows this result was already posted.
+3. `state.json` is updated with the new match/event id, and the GitHub
+   Actions workflow commits that change back to the repo, so the next
+   scheduled run knows this result was already posted.
 
-On the very first run ever (when `state.json` has no recorded match yet),
-the bot deliberately does **not** post anything -- it just records the
-latest finished match as "already seen". This avoids posting about an old
-match the moment you first set the bot up. From the next new result
-onwards, it posts normally.
+On the very first run ever for each check (when its key isn't in
+`state.json` yet), the bot deliberately does **not** post anything -- it
+just records the latest finished match as "already seen". This avoids
+posting about an old match the moment you first set the bot up (or the
+moment this multi-competition support is deployed to an existing bot).
+From the next new result onwards, it posts normally.
+
+**Known limitation:** extra-time/penalty-shootout knockout results (which
+Copa del Rey ties can go to) aren't specially handled -- classification
+uses TheSportsDB's regulation-time score, since how it represents a penalty
+shootout on the free tier hasn't been confirmed. Worth revisiting if this
+bot needs to cover a tie that goes to penalties.
 
 ## Scorer names, standout players, and match drama
 
 football-data.org's free tier only gives half-time and full-time scores --
 no goal-by-goal detail, so there's no way to know who scored, when, or
 whether anyone was sent off. To add that, `main.py` also queries
-[TheSportsDB](https://www.thesportsdb.com/), a second, independent free
-API, right after detecting a new result. If it finds the matching event:
+[TheSportsDB](https://www.thesportsdb.com/) right after detecting a new La
+Liga/Champions League result (for anything else, TheSportsDB is already the
+primary source -- see "How it works" above -- so its timeline is used
+directly, not as a lookup on top of another source). If it finds the
+matching event:
 
 - **Celta's scorer(s) and goal minute(s)** get appended to the message,
   e.g.:
@@ -315,10 +346,10 @@ real using live data.
 
 | File | Purpose |
 |---|---|
-| `main.py` | The core script: fetches match data, optionally enriches it with scorer/assist/red-card data from TheSportsDB, classifies the result into a category, posts to Telegram, updates state. |
+| `main.py` | The core script: two independent checks (La Liga/Champions League via football-data.org, everything else via TheSportsDB), each fetching match data, classifying the result into a category, posting to Telegram, and updating its own state. |
 | `phrases.py` | Galician phrase banks, one per category (16 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
-| `state.json` | Tracks the last match id that was posted, so results aren't duplicated. |
+| `state.json` | Tracks the last match/event id each check posted, so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |
 | `.github/workflows/check_result.yml` | The scheduled GitHub Actions workflow. |
 

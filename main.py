@@ -2,20 +2,29 @@
 """
 main.py -- Manel Bot
 
-This script checks whether Celta de Vigo have just finished a La Liga match,
-and if so, posts a result message to a Telegram channel.
+This script checks whether Celta de Vigo have just finished a match, and if
+so, posts a result message to a Telegram channel.
 
 It is designed to be run on a schedule (see .github/workflows/check_result.yml)
-rather than kept running all the time. Each run does the following:
+rather than kept running all the time. Each run does two independent checks:
 
-  1. Read state.json to see which finished match we last posted about.
-  2. Ask football-data.org for Celta's most recent matches.
-  3. If there's a finished match we haven't posted yet, work out not just
-     WIN/DRAW/LOSS but the *shape* of the match (comeback, blowout, narrow
-     result, etc. -- see classify_match()), pick a random Galician phrase
-     matching that, and send a message to the Telegram channel.
-  4. Save the new match id to state.json so we don't post the same result
-     twice next time this script runs.
+  1. check_la_liga_result() -- La Liga and the Champions League, via
+     football-data.org (the only two competitions its free tier covers for
+     Celta -- confirmed against the live API).
+  2. check_other_competitions_result() -- everything else (Copa del Rey,
+     Europa League, Conference League, ...), via TheSportsDB, which
+     football-data.org's free tier simply doesn't include. It looks up
+     Celta's actual latest finished match regardless of competition, and
+     skips it if that turns out to be a La Liga/Champions League match --
+     those are already handled (with richer data) by check #1.
+
+Both checks work the same way: read state.json for the last match we
+already posted about, compare it to the latest finished match, and if
+there's a new one, work out not just WIN/DRAW/LOSS but the *shape* of the
+match (comeback, blowout, narrow result, etc. -- see classify_match()),
+pick a random Galician phrase matching that, and send a message to the
+Telegram channel. Each writes its own key to state.json so the two checks
+don't interfere with each other.
 
 Nothing here needs a server or a database -- state.json (a single small
 JSON file) is all we use to remember what's already been posted, and the
@@ -40,9 +49,14 @@ from phrases import get_random_phrase
 # back by the GitHub Actions workflow after every run.
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
-# football-data.org competition code for the Spanish La Liga ("PD" = Primera
-# División). See https://www.football-data.org/documentation/quickstart
-COMPETITION_CODE = "PD"
+# football-data.org competition codes this check covers: "PD" (La Liga,
+# Primera División) and "CL" (Champions League). These are the only two
+# competitions Celta could play in that football-data.org's *free* tier
+# actually includes -- confirmed by querying /v4/competitions with our key
+# and separately getting a 403 "check your subscription" on both Copa del
+# Rey and the Europa League. See check_other_competitions_result() below
+# for how those (and anything else) get covered instead, via TheSportsDB.
+COMPETITION_CODES = "PD,CL"
 
 # football-data.org's numeric id for RC Celta de Vigo.
 #
@@ -79,6 +93,18 @@ DEFAULT_THESPORTSDB_TEAM_ID = "133937"
 # ever becomes an issue, register for a personal key at
 # https://www.thesportsdb.com/free_sports_api and set THESPORTSDB_API_KEY.
 DEFAULT_THESPORTSDB_API_KEY = "3"
+
+# TheSportsDB's own numeric league ids for La Liga and the Champions League
+# (confirmed live: GET /search_all_leagues.php?c=Spain and
+# /lookupleague.php?id=4480). check_other_competitions_result() uses these
+# to recognise when Celta's latest TheSportsDB event is actually one of the
+# two competitions check_la_liga_result() already handles (with richer
+# half-time data straight from football-data.org), so it doesn't post the
+# same match a second time.
+THESPORTSDB_LEAGUES_COVERED_BY_FOOTBALL_DATA = {
+    "4335",  # Spanish La Liga
+    "4480",  # UEFA Champions League
+}
 
 # A goal scored at or after this minute counts as "late drama" for the
 # WIN_LATE / DRAW_LATE / LOSS_LATE categories.
@@ -134,7 +160,8 @@ def save_state(state):
 
 def fetch_recent_matches(api_key, team_id):
     """
-    Ask football-data.org for Celta's most recent FINISHED matches.
+    Ask football-data.org for Celta's most recent FINISHED matches in the
+    competitions its free tier covers (see COMPETITION_CODES).
 
     Returns a list of match dicts (newest first), or None if the request
     failed for any reason. We deliberately return None instead of raising,
@@ -144,7 +171,7 @@ def fetch_recent_matches(api_key, team_id):
     headers = {"X-Auth-Token": api_key}
     params = {
         "status": "FINISHED",
-        "competitions": COMPETITION_CODE,
+        "competitions": COMPETITION_CODES,
         "limit": MATCH_FETCH_LIMIT,
     }
 
@@ -175,13 +202,15 @@ def fetch_recent_matches(api_key, team_id):
 
     matches = data.get("matches", [])
 
-    # Extra safety net: only keep matches that are actually in La Liga and
-    # actually finished, in case the API ever returns something unexpected.
+    # Extra safety net: only keep matches that are actually in one of our
+    # covered competitions and actually finished, in case the API ever
+    # returns something unexpected.
+    covered_codes = set(COMPETITION_CODES.split(","))
     matches = [
         m
         for m in matches
         if m.get("status") == "FINISHED"
-        and m.get("competition", {}).get("code") == COMPETITION_CODE
+        and m.get("competition", {}).get("code") in covered_codes
     ]
 
     # Sort newest first by kickoff date, so matches[0] is the latest match.
@@ -190,15 +219,22 @@ def fetch_recent_matches(api_key, team_id):
 
 
 # ---------------------------------------------------------------------------
-# TheSportsDB (optional enrichment: scorers, assists, red cards)
+# TheSportsDB -- covers two different jobs:
+#   1. Enrichment for La Liga/Champions League matches (scorers, assists,
+#      red cards) on top of football-data.org's core result -- optional,
+#      never blocks posting. See fetch_thesportsdb_match_events().
+#   2. The *only* source for competitions football-data.org's free tier
+#      doesn't cover at all (Copa del Rey, Europa League, ...) -- see
+#      fetch_thesportsdb_latest_event() and check_other_competitions_result().
 # ---------------------------------------------------------------------------
 
-def fetch_thesportsdb_match_events(match, thesportsdb_team_id, api_key):
+def _fetch_thesportsdb_timeline(event_id, thesportsdb_team_id, api_key):
     """
-    Look up the same match on TheSportsDB and return its goal-by-goal and
-    card timeline, so we can name scorers (and who assisted them), detect
-    late drama, and detect a Celta player being sent off -- none of which
-    football-data.org's free tier can tell us on its own.
+    Fetch and parse the goal-by-goal and card timeline for one TheSportsDB
+    event id. Shared by fetch_thesportsdb_match_events() (enrichment, event
+    found by matching calendar date) and check_other_competitions_result()
+    (the event id is already known there), so both parse timeline entries
+    identically.
 
     Returns {"goals": [...], "red_cards": [...]}, where:
       - goals is a list sorted by minute, each a dict like
@@ -207,44 +243,16 @@ def fetch_thesportsdb_match_events(match, thesportsdb_team_id, api_key):
       - red_cards is a list of dicts like
         {"minute": 72, "player": "...", "celta": True}
 
-    Returns None (not a dict) if anything about this lookup fails, or we
-    can't confidently match it to the right event. Callers must treat None
-    as "no enrichment available this time" and carry on without it --
-    never as an error worth stopping for. Either inner list can still be
-    empty (a real match can have zero red cards) -- only the outer None
-    means "no data at all".
+    Returns None (not a dict) if the lookup itself fails. Either inner list
+    can still be empty (a real match can have zero red cards) -- only the
+    outer None means "no data at all".
     """
-    match_date = match.get("utcDate", "")[:10]  # "2026-09-13T12:00:00Z" -> "2026-09-13"
-    if not match_date:
-        return None
-
     base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}"
 
     try:
         response = requests.get(
-            f"{base_url}/eventslast.php",
-            params={"id": thesportsdb_team_id},
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        events = response.json().get("results") or []
-    except (requests.exceptions.RequestException, ValueError) as error:
-        print(f"WARNING: TheSportsDB lookup failed, posting without extra detail: {error}")
-        return None
-
-    # Find the event that's actually the same match: same calendar date.
-    # (football-data.org and TheSportsDB use different ids for the same
-    # real-world match, so date is our simplest reliable correlation key --
-    # a team can't play two matches on the same day.)
-    matching_event = next((e for e in events if e.get("dateEvent") == match_date), None)
-    if matching_event is None:
-        print(f"WARNING: no TheSportsDB event found for {match_date}, posting without extra detail.")
-        return None
-
-    try:
-        response = requests.get(
             f"{base_url}/lookuptimeline.php",
-            params={"id": matching_event.get("idEvent")},
+            params={"id": event_id},
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -285,6 +293,152 @@ def fetch_thesportsdb_match_events(match, thesportsdb_team_id, api_key):
     goals.sort(key=lambda g: g["minute"])
     red_cards.sort(key=lambda c: c["minute"])
     return {"goals": goals, "red_cards": red_cards}
+
+
+def fetch_thesportsdb_match_events(match, thesportsdb_team_id, api_key):
+    """
+    Look up the same football-data.org match on TheSportsDB and return its
+    timeline, so we can name scorers (and who assisted them), detect late
+    drama, and detect a Celta player being sent off -- none of which
+    football-data.org's free tier can tell us on its own. Used only for the
+    two competitions football-data.org covers (see check_la_liga_result());
+    check_other_competitions_result() already has its event id directly and
+    calls _fetch_thesportsdb_timeline() itself.
+
+    Returns None (not a dict) if anything about this lookup fails, or we
+    can't confidently match it to the right event -- callers must treat
+    None as "no enrichment available this time" and carry on without it,
+    never as an error worth stopping for.
+    """
+    match_date = match.get("utcDate", "")[:10]  # "2026-09-13T12:00:00Z" -> "2026-09-13"
+    if not match_date:
+        return None
+
+    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}"
+
+    try:
+        response = requests.get(
+            f"{base_url}/eventslast.php",
+            params={"id": thesportsdb_team_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        events = response.json().get("results") or []
+    except (requests.exceptions.RequestException, ValueError) as error:
+        print(f"WARNING: TheSportsDB lookup failed, posting without extra detail: {error}")
+        return None
+
+    # Find the event that's actually the same match: same calendar date.
+    # (football-data.org and TheSportsDB use different ids for the same
+    # real-world match, so date is our simplest reliable correlation key --
+    # a team can't play two matches on the same day.)
+    matching_event = next((e for e in events if e.get("dateEvent") == match_date), None)
+    if matching_event is None:
+        print(f"WARNING: no TheSportsDB event found for {match_date}, posting without extra detail.")
+        return None
+
+    return _fetch_thesportsdb_timeline(matching_event.get("idEvent"), thesportsdb_team_id, api_key)
+
+
+def fetch_thesportsdb_latest_event(thesportsdb_team_id, api_key):
+    """
+    Ask TheSportsDB for Celta's single most recent event, in ANY
+    competition, via eventslast.php -- the one free-test-key endpoint
+    confirmed to return live, unrestricted data for a specific team (its
+    bulk season-listing endpoints are heavily sample-limited on the free
+    key, so they can't be used to browse a whole competition's history --
+    but this bot only ever needs "what was Celta's last finished match",
+    which this endpoint answers directly).
+
+    Returns the raw event dict, or None if the request failed or returned
+    nothing.
+    """
+    base_url = f"https://www.thesportsdb.com/api/v1/json/{api_key}"
+    try:
+        response = requests.get(
+            f"{base_url}/eventslast.php",
+            params={"id": thesportsdb_team_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        results = response.json().get("results") or []
+    except (requests.exceptions.RequestException, ValueError) as error:
+        print(f"WARNING: TheSportsDB latest-event lookup failed: {error}")
+        return None
+    return results[0] if results else None
+
+
+def _derive_half_time_from_goals(goals, celta_ft, opponent_ft, celta_is_home):
+    """
+    Reconstruct the half-time score by counting timeline goals scored by
+    minute 45, for matches that only have TheSportsDB data (no
+    football-data.org half-time score to use directly -- see
+    build_thesportsdb_match()).
+
+    Only trusted if the timeline's own goal count adds up to the real
+    final score -- the same safety check _classify_late_drama() uses,
+    since TheSportsDB's timeline is volunteer-maintained and can be
+    missing a goal. If they don't match, we can't tell which goals
+    happened before half-time, so this returns None and classify_match()
+    falls back to its non-half-time categories, exactly as if
+    football-data.org just hadn't given us a half-time score either.
+    """
+    if not goals:
+        return None
+
+    celta_goal_count = sum(1 for g in goals if g["celta_scored"])
+    opponent_goal_count = len(goals) - celta_goal_count
+    if celta_goal_count != celta_ft or opponent_goal_count != opponent_ft:
+        return None
+
+    home_ht = sum(1 for g in goals if g["minute"] <= 45 and g["celta_scored"] == celta_is_home)
+    away_ht = sum(1 for g in goals if g["minute"] <= 45 and g["celta_scored"] != celta_is_home)
+    return {"home": home_ht, "away": away_ht}
+
+
+def build_thesportsdb_match(event, thesportsdb_team_id, goals):
+    """
+    Turn a raw TheSportsDB event (from fetch_thesportsdb_latest_event())
+    into a match dict shaped just like a football-data.org one -- id,
+    homeTeam/awayTeam with ids and names, score.fullTime, score.halfTime,
+    competition.name -- so classify_match() and build_message() can be
+    reused completely unchanged for competitions football-data.org's free
+    tier doesn't cover (Copa del Rey, Europa League, ...).
+
+    Half-time score is derived from `goals` (see
+    _derive_half_time_from_goals()) when available and trustworthy;
+    otherwise it's left as None, same as a football-data.org match that's
+    simply missing that field.
+
+    Known limitation: extra-time/penalty-shootout knockout results aren't
+    specially handled -- this uses TheSportsDB's regulation-time score
+    (intHomeScore/intAwayScore) for classification like any other match,
+    since we haven't confirmed how TheSportsDB represents a penalty
+    shootout on the free tier. Worth revisiting if this bot needs to cover
+    a Copa del Rey tie that goes to penalties.
+    """
+    team_id = int(thesportsdb_team_id)
+    home_id = int(event.get("idHomeTeam") or 0)
+    away_id = int(event.get("idAwayTeam") or 0)
+    home_score = int(event.get("intHomeScore") or 0)
+    away_score = int(event.get("intAwayScore") or 0)
+    celta_is_home = home_id == team_id
+
+    celta_ft = home_score if celta_is_home else away_score
+    opponent_ft = away_score if celta_is_home else home_score
+    half_time = _derive_half_time_from_goals(goals, celta_ft, opponent_ft, celta_is_home)
+
+    return {
+        "id": f"tsdb-{event.get('idEvent')}",
+        "utcDate": event.get("strTimestamp") or f"{event.get('dateEvent', '')}T00:00:00Z",
+        "homeTeam": {"id": home_id, "name": event.get("strHomeTeam", "o rival")},
+        "awayTeam": {"id": away_id, "name": event.get("strAwayTeam", "o rival")},
+        "score": {
+            "fullTime": {"home": home_score, "away": away_score},
+            "halfTime": half_time,
+        },
+        "competition": {"name": event.get("strLeague", "")},
+    }
 
 
 def _classify_late_drama(goals, celta_ft, opponent_ft):
@@ -488,7 +642,7 @@ def _find_star_performer(goals):
     return (name, count) if count >= 2 else None
 
 
-def build_message(match, team_id, goals=None, red_cards=None):
+def build_message(match, team_id, goals=None, red_cards=None, competition_name=None):
     """
     Build the full text we're going to post to Telegram, e.g.:
     "Ben, Celta, ben! Partido gañado con mérito! Celta 2-1 Getafe"
@@ -507,6 +661,13 @@ def build_message(match, team_id, goals=None, red_cards=None):
     "... Celta 2-1 Getafe (marcou Iago Aspas (min. 23, min. 80)). Iago Aspas leva 2 accións de gol hoxe!"
     Leave both as None (the default) to build the message exactly as
     before, with no extra detail.
+
+    If `competition_name` is given (used by check_other_competitions_result()
+    for anything that isn't La Liga/Champions League), the message is
+    prefixed with "[<competition_name>] " so it's clear at a glance this
+    isn't a league result -- e.g. "[Copa del Rey] Ben, Celta, ben! ...".
+    Leave it as None (the default, used for every La Liga/Champions League
+    message) to build the message with no prefix, exactly as before.
     """
     team_id = int(team_id)
     home_team = match["homeTeam"]
@@ -530,6 +691,9 @@ def build_message(match, team_id, goals=None, red_cards=None):
     if star:
         name, count = star
         result_line = f"{result_line}. {name} leva {count} accións de gol hoxe!"
+
+    if competition_name:
+        result_line = f"[{competition_name}] {result_line}"
 
     return result_line
 
@@ -813,6 +977,37 @@ FAKE_TEST_MATCHES = [
         "goals": None,
         "red_cards": [{"minute": 50, "player": "Carl Starfelt", "celta": True}],
     },
+    {  # Same as WIN_NARROW, but tagged as a Copa del Rey result -- exercises
+       # the "[competition_name]" message prefix that
+       # check_other_competitions_result() uses for anything football-data.org
+       # doesn't cover.
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 617, "name": "SD Ponferradina"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 1, "away": 0},
+                "halfTime": {"home": 0, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "competition_name": "Copa del Rey",
+    },
+    {  # Same as LOSS_STANDARD, but tagged as a Champions League result.
+        "match": {
+            "homeTeam": {"id": 618, "name": "Bayern Munich"},
+            "awayTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 3, "away": 1},
+                "halfTime": {"home": 1, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "competition_name": "UEFA Champions League",
+    },
 ]
 
 
@@ -838,7 +1033,11 @@ def run_test_message():
 
     fake_entry = random.choice(FAKE_TEST_MATCHES)
     message = build_message(
-        fake_entry["match"], DEFAULT_CELTA_TEAM_ID, fake_entry["goals"], fake_entry["red_cards"]
+        fake_entry["match"],
+        DEFAULT_CELTA_TEAM_ID,
+        fake_entry["goals"],
+        fake_entry["red_cards"],
+        fake_entry.get("competition_name"),
     )
 
     successes = 0
@@ -855,72 +1054,62 @@ def run_test_message():
 
 
 # ---------------------------------------------------------------------------
-# Main
+# The two independent checks
 # ---------------------------------------------------------------------------
 
-def main():
-    # Special test mode: "python main.py --test-telegram" only exercises
-    # the Telegram-sending part, skipping football-data.org and state.json
-    # entirely. See run_test_message() above for details.
-    if "--test-telegram" in sys.argv:
-        run_test_message()
-        return
+def check_la_liga_result(
+    state, football_api_key, celta_team_id, thesportsdb_team_id, thesportsdb_api_key,
+    telegram_token, telegram_channel_ids,
+):
+    """
+    Check football-data.org for a new finished La Liga/Champions League
+    match and post it if there is one. This is the original core flow --
+    see check_other_competitions_result() below for the newer path that
+    covers everything football-data.org's free tier can't (Copa del Rey,
+    Europa League, ...) via TheSportsDB instead.
 
-    # 1. Load required configuration from environment variables / secrets.
-    telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
-    telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
-    football_api_key = get_required_env("FOOTBALL_DATA_API_KEY")
-    # CELTA_TEAM_ID is not a secret, just a config value, so it's fine to
-    # fall back to a default instead of requiring it to be set. We use
-    # "or" (not just .get(..., default)) because the GitHub Actions
-    # workflow always sets this env var, even to an empty string if the
-    # secret hasn't been configured -- .get()'s default would never kick
-    # in for an empty-but-present value.
-    celta_team_id = os.environ.get("CELTA_TEAM_ID") or DEFAULT_CELTA_TEAM_ID
-    # Same "or" pattern for the optional TheSportsDB config -- neither of
-    # these is a secret, both have working free defaults (see their
-    # DEFAULT_* constants above).
-    thesportsdb_team_id = os.environ.get("THESPORTSDB_TEAM_ID") or DEFAULT_THESPORTSDB_TEAM_ID
-    thesportsdb_api_key = os.environ.get("THESPORTSDB_API_KEY") or DEFAULT_THESPORTSDB_API_KEY
+    Mutates `state` in place and saves it (via save_state(state), never a
+    fresh dict) whenever `last_processed_match_id` changes, so we never
+    wipe out check_other_competitions_result()'s own key in the same file.
 
-    # 2. Load what we last posted about.
-    state = load_state()
-    last_processed_id = state.get("last_processed_match_id")
-
-    # 3. Fetch Celta's recent finished matches.
+    Returns True only if a genuinely new result failed to reach every
+    Telegram channel (so main() can still exit non-zero to flag the
+    failure), False otherwise -- including "nothing new to post".
+    """
     matches = fetch_recent_matches(football_api_key, celta_team_id)
     if not matches:
         # Either an API error (already logged above) or genuinely no
-        # finished matches yet. Either way, there's nothing more to do --
-        # exit cleanly so the scheduled workflow doesn't show as failed.
-        print("No finished matches to process this run.")
-        return
+        # finished matches yet. Either way, there's nothing more to do.
+        print("No finished La Liga/Champions League matches to process this run.")
+        return False
 
     latest_match = matches[0]
     latest_match_id = latest_match["id"]
+    last_processed_id = state.get("last_processed_match_id")
 
-    # 4. First-run bootstrap: if we have no prior state at all, don't post
-    #    about a match that may have finished long before the bot existed.
-    #    Just remember it as "already seen" and start posting from the next
-    #    new result onwards.
+    # First-run bootstrap: if we have no prior state at all, don't post
+    # about a match that may have finished long before the bot existed.
+    # Just remember it as "already seen" and start posting from the next
+    # new result onwards.
     if last_processed_id is None:
         print(
             f"First run detected. Recording match {latest_match_id} as the "
             "starting point without posting (to avoid posting an old result)."
         )
-        save_state({"last_processed_match_id": latest_match_id})
-        return
+        state["last_processed_match_id"] = latest_match_id
+        save_state(state)
+        return False
 
-    # 5. If the latest finished match is one we've already posted, there's
-    #    nothing new to do.
+    # If the latest finished match is one we've already posted, there's
+    # nothing new to do.
     if latest_match_id == last_processed_id:
-        print("Latest finished match has already been posted. Nothing to do.")
-        return
+        print("Latest finished La Liga/Champions League match has already been posted. Nothing to do.")
+        return False
 
-    # 6. We have a new result! Try to enrich it with scorer/assist/red-card
-    #    data from TheSportsDB -- if this fails or doesn't find a match,
-    #    events is None and build_message() just posts without that extra
-    #    detail. This never blocks posting the core result.
+    # We have a new result! Try to enrich it with scorer/assist/red-card
+    # data from TheSportsDB -- if this fails or doesn't find a match,
+    # events is None and build_message() just posts without that extra
+    # detail. This never blocks posting the core result.
     events = fetch_thesportsdb_match_events(latest_match, thesportsdb_team_id, thesportsdb_api_key)
     goals = events["goals"] if events else None
     red_cards = events["red_cards"] if events else None
@@ -942,7 +1131,7 @@ def main():
         # Every channel failed -- don't update state, so we retry posting
         # this same result (to all channels) on the next scheduled run.
         print("Failed to send to any channel. Will retry next run.")
-        sys.exit(1)
+        return True
 
     if successes < len(telegram_channel_ids):
         # Partial failure: at least one channel got the message. We still
@@ -955,10 +1144,156 @@ def main():
             "received this message. Check the errors above."
         )
 
-    # 7. Success (at least partially)! Remember this match so we don't post
-    #    it again to the channels that already received it.
-    save_state({"last_processed_match_id": latest_match_id})
-    print("Done.")
+    # Success (at least partially)! Remember this match so we don't post
+    # it again to the channels that already received it.
+    state["last_processed_match_id"] = latest_match_id
+    save_state(state)
+    print("Done with La Liga/Champions League check.")
+    return False
+
+
+def check_other_competitions_result(
+    state, thesportsdb_team_id, thesportsdb_api_key, telegram_token, telegram_channel_ids,
+):
+    """
+    Check TheSportsDB directly for Celta's actual latest finished match in
+    ANY competition, and post it if it's new and NOT already covered by
+    check_la_liga_result() -- this is how the bot covers Copa del Rey, the
+    Europa League, the Conference League, etc., which football-data.org's
+    free tier doesn't include at all (only La Liga and the Champions League
+    do -- see COMPETITION_CODES above).
+
+    Mutates `state` in place, using a different key
+    (`last_processed_thesportsdb_event_id`) than check_la_liga_result()'s
+    `last_processed_match_id`, so the two checks track their own progress
+    independently in the same state.json without clobbering each other.
+
+    Returns True only if a genuinely new, postable result failed to reach
+    every Telegram channel (so main() can still exit non-zero), False
+    otherwise -- including "nothing new" or "it was actually a La
+    Liga/Champions League match, already handled above".
+    """
+    latest_event = fetch_thesportsdb_latest_event(thesportsdb_team_id, thesportsdb_api_key)
+    if not latest_event:
+        print("No TheSportsDB event data available this run.")
+        return False
+
+    if latest_event.get("strStatus") != "FT":
+        print("Celta's most recent TheSportsDB event isn't finished yet.")
+        return False
+
+    event_id = latest_event.get("idEvent")
+    last_seen_event_id = state.get("last_processed_thesportsdb_event_id")
+
+    # First-run bootstrap, same reasoning as check_la_liga_result(): don't
+    # post about a match that may have finished long before this check
+    # existed, just record it as the starting point.
+    if last_seen_event_id is None:
+        print(
+            f"First run detected for TheSportsDB tracking. Recording event {event_id} "
+            "as the starting point without posting."
+        )
+        state["last_processed_thesportsdb_event_id"] = event_id
+        save_state(state)
+        return False
+
+    if event_id == last_seen_event_id:
+        print("Latest TheSportsDB event has already been processed. Nothing to do.")
+        return False
+
+    if latest_event.get("idLeague") in THESPORTSDB_LEAGUES_COVERED_BY_FOOTBALL_DATA:
+        # This is a La Liga/Champions League match -- check_la_liga_result()
+        # already handles (or will handle) it, with richer half-time data
+        # straight from football-data.org. Just mark it as seen here so we
+        # don't keep re-detecting it as "new" on every future run.
+        print(
+            f"Latest TheSportsDB event ({event_id}) is a La Liga/Champions League "
+            "match -- already handled by the football-data.org check. Marking as seen."
+        )
+        state["last_processed_thesportsdb_event_id"] = event_id
+        save_state(state)
+        return False
+
+    competition_name = latest_event.get("strLeague") or "outra competición"
+    print(f"New result detected via TheSportsDB: {competition_name}.")
+
+    timeline = _fetch_thesportsdb_timeline(event_id, thesportsdb_team_id, thesportsdb_api_key)
+    goals = timeline["goals"] if timeline else None
+    red_cards = timeline["red_cards"] if timeline else None
+
+    synthetic_match = build_thesportsdb_match(latest_event, thesportsdb_team_id, goals)
+    message = build_message(synthetic_match, thesportsdb_team_id, goals, red_cards, competition_name)
+    print(f"Posting new result: {message}")
+
+    successes = 0
+    for channel_id in telegram_channel_ids:
+        if send_telegram_message(telegram_token, channel_id, message):
+            successes += 1
+        else:
+            print(f"Failed to send to channel '{channel_id}'.")
+
+    if successes == 0:
+        print("Failed to send to any channel. Will retry next run.")
+        return True
+
+    if successes < len(telegram_channel_ids):
+        print(
+            f"WARNING: only {successes}/{len(telegram_channel_ids)} channels "
+            "received this message. Check the errors above."
+        )
+
+    state["last_processed_thesportsdb_event_id"] = event_id
+    save_state(state)
+    print("Done with other-competitions check.")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    # Special test mode: "python main.py --test-telegram" only exercises
+    # the Telegram-sending part, skipping football-data.org, TheSportsDB,
+    # and state.json entirely. See run_test_message() above for details.
+    if "--test-telegram" in sys.argv:
+        run_test_message()
+        return
+
+    # Load required configuration from environment variables / secrets.
+    telegram_token = get_required_env("TELEGRAM_BOT_TOKEN")
+    telegram_channel_ids = parse_channel_ids(get_required_env("TELEGRAM_CHANNEL_ID"))
+    football_api_key = get_required_env("FOOTBALL_DATA_API_KEY")
+    # CELTA_TEAM_ID is not a secret, just a config value, so it's fine to
+    # fall back to a default instead of requiring it to be set. We use
+    # "or" (not just .get(..., default)) because the GitHub Actions
+    # workflow always sets this env var, even to an empty string if the
+    # secret hasn't been configured -- .get()'s default would never kick
+    # in for an empty-but-present value.
+    celta_team_id = os.environ.get("CELTA_TEAM_ID") or DEFAULT_CELTA_TEAM_ID
+    # Same "or" pattern for the optional TheSportsDB config -- neither of
+    # these is a secret, both have working free defaults (see their
+    # DEFAULT_* constants above).
+    thesportsdb_team_id = os.environ.get("THESPORTSDB_TEAM_ID") or DEFAULT_THESPORTSDB_TEAM_ID
+    thesportsdb_api_key = os.environ.get("THESPORTSDB_API_KEY") or DEFAULT_THESPORTSDB_API_KEY
+
+    # Load what we last posted about (shared by both checks below, each
+    # using its own key -- see their docstrings).
+    state = load_state()
+
+    la_liga_failed = check_la_liga_result(
+        state, football_api_key, celta_team_id, thesportsdb_team_id, thesportsdb_api_key,
+        telegram_token, telegram_channel_ids,
+    )
+    other_failed = check_other_competitions_result(
+        state, thesportsdb_team_id, thesportsdb_api_key, telegram_token, telegram_channel_ids,
+    )
+
+    if la_liga_failed or other_failed:
+        # At least one check found a genuinely new result that failed to
+        # reach every channel -- exit non-zero so the scheduled workflow
+        # shows as failed and it's easy to notice.
+        sys.exit(1)
 
 
 if __name__ == "__main__":
