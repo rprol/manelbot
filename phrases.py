@@ -18,6 +18,15 @@
 # for that outcome ("Ben, Celta, ben!" / "Regular, Celta, regular!" / "Mal,
 # Celta, mal!"), as required -- only the continuation changes.
 #
+# STYLE: phrases are written short and punchy, closer to how a fan would
+# actually post about the result than a formal match report -- dropping the
+# explicit subject where Galician's conjugation already makes it clear
+# (fine in this pro-drop language, and reads more like a real post), mixing
+# singular ("o Celta segue...") and plural ("gañaron...") framing the way
+# real match commentary does. Punctuation is deliberate: "!" for anything
+# with real excitement or urgency, "." for the flatter/more resigned ones --
+# keep that distinction if you add more.
+#
 # The *_LATE and *_TEN_MEN categories are only reachable when TheSportsDB
 # enrichment (goal/card timeline data) is available for that match -- see
 # fetch_thesportsdb_match_events() in main.py. Without it, matches fall
@@ -48,26 +57,26 @@ import random
 
 # Celta were behind at half-time and still won.
 WIN_COMEBACK_PHRASES = [
-    "Ben, Celta, ben! Ían perdendo e deron a volta ao marcador!",
-    "Ben, Celta, ben! Remontada de carácter para levarse os tres puntos!",
-    "Ben, Celta, ben! Cando parecía perdido, o Celta sacou forzas para gañar!",
-    "Ben, Celta, ben! Da desvantaxe á vitoria, que remontada!",
+    "Ben, Celta, ben! Perdían e deron a volta, que remontada!",
+    "Ben, Celta, ben! Ían por detrás e acabaron gañando, que carácter!",
+    "Ben, Celta, ben! Cando parecía perdido, chegou a reacción!",
+    "Ben, Celta, ben! Da desvantaxe á vitoria nun pispás!",
 ]
 
 # Celta won by 3 or more goals.
 WIN_BLOWOUT_PHRASES = [
     "Ben, Celta, ben! Goleada sen paliativos!",
-    "Ben, Celta, ben! Un auténtico recital do equipo celeste!",
+    "Ben, Celta, ben! Recital total do equipo celeste!",
+    "Ben, Celta, ben! O rival non tivo opción!",
     "Ben, Celta, ben! Vitoria contundente, sen discusión posible!",
-    "Ben, Celta, ben! O rival non tivo opción esta tarde!",
 ]
 
 # Celta won by exactly 1 goal.
 WIN_NARROW_PHRASES = [
-    "Ben, Celta, ben! Vitoria sufrida pero moi merecida!",
-    "Ben, Celta, ben! Gañouse pola mínima, pero gañouse!",
+    "Ben, Celta, ben! Sufrida, pero moi merecida!",
+    "Ben, Celta, ben! Gañouse pola mínima, e vale igual!",
     "Ben, Celta, ben! Tres puntos apertados que saben a gloria!",
-    "Ben, Celta, ben! Non foi doado, pero o Celta levou os tres puntos!",
+    "Ben, Celta, ben! Non foi doado, pero suman os tres!",
 ]
 
 # Any other win (e.g. led throughout, won by 2) -- the general-purpose bank.
@@ -80,35 +89,35 @@ WIN_STANDARD_PHRASES = [
 
 # The goal that won it came in the closing minutes (see LATE_GOAL_MINUTE).
 WIN_LATE_PHRASES = [
-    "Ben, Celta, ben! Vitoria no derradeiro suspiro do partido!",
-    "Ben, Celta, ben! Gol no tempo de desconto que vale tres puntos!",
-    "Ben, Celta, ben! Agonía e gloria, o gol chegou cando xa non se esperaba!",
-    "Ben, Celta, ben! Explosión de alegría cun gol de última hora!",
+    "Ben, Celta, ben! Vitoria no derradeiro suspiro!",
+    "Ben, Celta, ben! Gol no descontado que vale tres puntos!",
+    "Ben, Celta, ben! Chegou xusto cando xa non se esperaba!",
+    "Ben, Celta, ben! Explosión de alegría no último minuto!",
 ]
 
 # Celta won despite having a player sent off during the match.
 WIN_TEN_MEN_PHRASES = [
     "Ben, Celta, ben! Vitoria heroica xogando con dez!",
-    "Ben, Celta, ben! Con un menos no campo e aínda así gañaron!",
+    "Ben, Celta, ben! Cun home menos no campo, e aínda así gañaron!",
     "Ben, Celta, ben! Que carácter, gañar cunha expulsión de por medio!",
-    "Ben, Celta, ben! Dez homes bastaron para levar os tres puntos!",
+    "Ben, Celta, ben! Dez homes chegaron e sobraron!",
 ]
 
 # Second win in a row in the same competition (no other story to tell
 # about this particular match -- see select_category() in main.py).
 WIN_STREAK_2_PHRASES = [
-    "Ben, Celta, ben! Segunda vitoria consecutiva, o equipo colle ritmo!",
+    "Ben, Celta, ben! Segunda seguida, o equipo colle ritmo!",
     "Ben, Celta, ben! Dúas seguidas, e cada vez con máis confianza!",
-    "Ben, Celta, ben! O Celta encadea a súa segunda vitoria!",
-    "Ben, Celta, ben! Racha de dúas vitorias e a afección xa sorrí!",
+    "Ben, Celta, ben! Encadea a súa segunda vitoria!",
+    "Ben, Celta, ben! Van dúas, e a afección xa sorrí!",
 ]
 
 # Third (or more) win in a row in the same competition.
 WIN_STREAK_3_PHRASES = [
-    "Ben, Celta, ben! Terceira vitoria consecutiva, o Celta está en racha!",
-    "Ben, Celta, ben! Xa van varias seguidas, isto é un gran momento!",
-    "Ben, Celta, ben! O bo momento non para, outra vitoria máis na racha!",
-    "Ben, Celta, ben! A racha triunfal continúa, que ben está o equipo!",
+    "Ben, Celta, ben! Terceira seguida, o Celta está en racha!",
+    "Ben, Celta, ben! Xa van varias, isto é un grande momento!",
+    "Ben, Celta, ben! O bo momento non para, outra máis!",
+    "Ben, Celta, ben! A racha triunfal segue, que ben está o equipo!",
 ]
 
 # A Copa del Rey win, which (in the current single-match, no-replay
@@ -116,10 +125,10 @@ WIN_STREAK_3_PHRASES = [
 # select_category() in main.py for why this doesn't apply to the Europa
 # League, whose format can't be read off a single match's result.
 WIN_ADVANCED_ROUND_PHRASES = [
-    "Ben, Celta, ben! O Celta avanza á seguinte rolda da copa!",
-    "Ben, Celta, ben! Segue vivo na copa, á próxima rolda!",
-    "Ben, Celta, ben! Billete para a seguinte eliminatoria conseguido!",
-    "Ben, Celta, ben! O soño copeiro continúa, á seguinte rolda!",
+    "Ben, Celta, ben! Á seguinte rolda!",
+    "Ben, Celta, ben! Segue vivo na copa!",
+    "Ben, Celta, ben! Billete conseguido para a próxima eliminatoria!",
+    "Ben, Celta, ben! O soño copeiro continúa!",
 ]
 
 # --- DRAW categories --------------------------------------------------------
@@ -127,26 +136,26 @@ WIN_ADVANCED_ROUND_PHRASES = [
 
 # Celta were behind at half-time and fought back to level it.
 DRAW_RALLY_PHRASES = [
-    "Regular, Celta, regular! Ían perdendo e conseguiron igualalo.",
+    "Regular, Celta, regular! Ían perdendo e igualaron, non está mal.",
     "Regular, Celta, regular! Sacaron un punto despois de ir por detrás.",
-    "Regular, Celta, regular! Remontada parcial que soubo a pouco, pero é un punto.",
-    "Regular, Celta, regular! Loitaron para escapar da derrota.",
+    "Regular, Celta, regular! Remontada parcial que sabe a pouco, pero suma.",
+    "Regular, Celta, regular! Loitaron ata o final para non perder.",
 ]
 
 # Celta were ahead at half-time but only came away with a draw.
 DRAW_SQUANDERED_PHRASES = [
     "Regular, Celta, regular! Ían gañando e deixárono escapar.",
     "Regular, Celta, regular! Tiñan a vitoria na man e esvaroulles.",
-    "Regular, Celta, regular! Dous puntos perdidos por non pechar o partido.",
-    "Regular, Celta, regular! Unha vantaxe que non souberon manter.",
+    "Regular, Celta, regular! Dous puntos perdidos por non pechalo.",
+    "Regular, Celta, regular! Non souberon manter a vantaxe.",
 ]
 
 # Level at half-time, level at full-time -- a flat, uneventful draw.
 DRAW_FLAT_PHRASES = [
-    "Regular, Celta, regular! Un empate que sabe a pouco.",
+    "Regular, Celta, regular! Empate que sabe a pouco.",
     "Regular, Celta, regular! Nin se gaña nin se perde, e iso pesa.",
-    "Regular, Celta, regular! Puntos que non acaban de convencer.",
-    "Regular, Celta, regular! Outra tarde sen brillo no marcador.",
+    "Regular, Celta, regular! Punto que non convence.",
+    "Regular, Celta, regular! Outra tarde sen brillo.",
 ]
 
 # The equalizer arrived in the closing minutes, rescuing a point that
@@ -155,7 +164,7 @@ DRAW_LATE_PHRASES = [
     "Regular, Celta, regular! Empate salvado no derradeiro intre!",
     "Regular, Celta, regular! Gol de última hora que evita a derrota!",
     "Regular, Celta, regular! Cando xa se daba por perdido, chegou a igualada!",
-    "Regular, Celta, regular! Un punto arrincado nos minutos finais!",
+    "Regular, Celta, regular! Punto arrincado nos minutos finais!",
 ]
 
 # --- LOSS categories --------------------------------------------------------
@@ -163,17 +172,17 @@ DRAW_LATE_PHRASES = [
 
 # Celta were ahead at half-time but ended up losing -- the worst kind.
 LOSS_COLLAPSE_PHRASES = [
-    "Mal, Celta, mal! Ían gañando e acabaron perdendo, un golpe durísimo.",
-    "Mal, Celta, mal! Desperdiciaron unha vantaxe e pagárono caro.",
-    "Mal, Celta, mal! Unha vitoria que se esfumou antes do final.",
-    "Mal, Celta, mal! De ir gañando a perder, un final para esquecer.",
+    "Mal, Celta, mal! Ían gañando e acabaron perdendo, golpe durísimo.",
+    "Mal, Celta, mal! Desperdiciaron a vantaxe e pagárono caro.",
+    "Mal, Celta, mal! A vitoria esfumouse antes do final.",
+    "Mal, Celta, mal! De gañar a perder, final para esquecer.",
 ]
 
 # Celta lost by 3 or more goals.
 LOSS_BLOWOUT_PHRASES = [
     "Mal, Celta, mal! Goleada dolorosa, noite para esquecer.",
     "Mal, Celta, mal! Unha manita que doe moito.",
-    "Mal, Celta, mal! Sen resposta posible ante un rival superior hoxe.",
+    "Mal, Celta, mal! Sen resposta ante un rival superior.",
     "Mal, Celta, mal! Derrota abultada que deixa tocada a afección.",
 ]
 
@@ -182,13 +191,13 @@ LOSS_NARROW_PHRASES = [
     "Mal, Celta, mal! Derrota axustada que sabe amarga.",
     "Mal, Celta, mal! Perdeuse por un fío, pero perdeuse.",
     "Mal, Celta, mal! Tan preto e tan lonxe á vez.",
-    "Mal, Celta, mal! Unha derrota mínima que igualmente doe.",
+    "Mal, Celta, mal! Mínima, pero doe igual.",
 ]
 
 # Any other loss (e.g. behind throughout, lost by 2) -- the general-purpose bank.
 LOSS_STANDARD_PHRASES = [
-    "Mal, Celta, mal! Unha noite negra para os celestes.",
-    "Mal, Celta, mal! Queda o silencio celeste, mágoa profunda.",
+    "Mal, Celta, mal! Noite negra para os celestes.",
+    "Mal, Celta, mal! Queda o silencio, mágoa profunda.",
     "Mal, Celta, mal! Derrota dura que doe no fondo da alma celeste.",
     "Mal, Celta, mal! A tristeza invade o celtismo hoxe.",
 ]
@@ -198,32 +207,32 @@ LOSS_STANDARD_PHRASES = [
 LOSS_LATE_PHRASES = [
     "Mal, Celta, mal! Golpe no derradeiro minuto, moi doloroso.",
     "Mal, Celta, mal! Todo perdido nos últimos alentos do partido.",
-    "Mal, Celta, mal! Un mazazo de última hora que ninguén esperaba.",
-    "Mal, Celta, mal! Tan preto de sumar e todo esvarou nos minutos finais.",
+    "Mal, Celta, mal! Mazazo de última hora que ninguén esperaba.",
+    "Mal, Celta, mal! Tan preto de sumar, e esvarou nos minutos finais.",
 ]
 
 # Celta lost after having a player sent off during the match.
 LOSS_TEN_MEN_PHRASES = [
     "Mal, Celta, mal! A expulsión pesou demasiado nesta derrota.",
-    "Mal, Celta, mal! Con dez homes foi imposible sacar algo positivo.",
-    "Mal, Celta, mal! A tarxeta vermella deixou ao equipo sen opcións.",
-    "Mal, Celta, mal! Xogar con un menos pasou factura hoxe.",
+    "Mal, Celta, mal! Cun home menos foi imposible sacar algo positivo.",
+    "Mal, Celta, mal! A vermella deixou ao equipo sen opcións.",
+    "Mal, Celta, mal! Xogar cun home menos pasou factura hoxe.",
 ]
 
 # Second loss in a row in the same competition.
 LOSS_STREAK_2_PHRASES = [
-    "Mal, Celta, mal! Segunda derrota consecutiva, malos tempos en Vigo.",
-    "Mal, Celta, mal! Dúas seguidas sen gañar, hai que reaccionar.",
-    "Mal, Celta, mal! O equipo encadea a súa segunda derrota.",
-    "Mal, Celta, mal! Van dúas derrotas seguidas, a preocupación medra.",
+    "Mal, Celta, mal! Segunda derrota seguida, malos tempos en Vigo.",
+    "Mal, Celta, mal! Dúas sen gañar, hai que reaccionar.",
+    "Mal, Celta, mal! Encadea a súa segunda derrota.",
+    "Mal, Celta, mal! Van dúas seguidas, a preocupación medra.",
 ]
 
 # Third (or more) loss in a row in the same competition.
 LOSS_STREAK_3_PHRASES = [
-    "Mal, Celta, mal! Terceira derrota consecutiva, momento moi delicado.",
-    "Mal, Celta, mal! Xa van varias seguidas sen gañar, preocupa e moito.",
-    "Mal, Celta, mal! A mala racha non para, outra derrota máis.",
-    "Mal, Celta, mal! A crise de resultados continúa, van xa varias caídas.",
+    "Mal, Celta, mal! Terceira seguida, momento moi delicado.",
+    "Mal, Celta, mal! Xa van varias sen gañar, preocupa e moito.",
+    "Mal, Celta, mal! A mala racha non para, outra máis.",
+    "Mal, Celta, mal! A crise de resultados segue, van xa varias caídas.",
 ]
 
 # Eliminated on aggregate from a two-legged cup tie (Copa del Rey
@@ -232,10 +241,10 @@ LOSS_STREAK_3_PHRASES = [
 # own scoreline -- Celta could even have won this specific leg and still
 # be eliminated on aggregate.
 LOSS_ELIMINATED_PHRASES = [
-    "Mal, Celta, mal! O Celta queda eliminado na eliminatoria!",
-    "Mal, Celta, mal! Adeus á competición, a eliminatoria non deu para máis!",
-    "Mal, Celta, mal! O global da eliminatoria deixa fóra ao Celta!",
-    "Mal, Celta, mal! O soño remata aquí, eliminados na eliminatoria!",
+    "Mal, Celta, mal! Eliminados na eliminatoria!",
+    "Mal, Celta, mal! Adeus á competición, non deu para máis.",
+    "Mal, Celta, mal! O global da eliminatoria deixa fóra ao Celta.",
+    "Mal, Celta, mal! O soño remata aquí.",
 ]
 
 # All phrase banks in one place, keyed by category. main.py's
@@ -300,91 +309,91 @@ TABLE_POSITION_PHRASES = {
     # Top LA_LIGA_EUROPEAN_POSITIONS.
     "EUROPEAN": {
         "WIN": [
-            "O Celta reafírmase con forza en posicións europeas!",
-            "Vitoria que consolida ao Celta entre os mellores da táboa!",
+            "Reafírmase con forza en posicións europeas!",
+            "Vitoria que consolida ao Celta entre os mellores!",
             "O soño europeo faise cada vez máis forte!",
         ],
         "LOSS": [
             "Aínda en Europa, pero esta derrota acende as alarmas.",
-            "O posto europeo tambalea despois desta derrota.",
+            "O posto europeo tambalea tras esta derrota.",
             "Malos síntomas para un Celta que quere seguir en Europa.",
         ],
         "DRAW": [
-            "O Celta segue instalado en posicións europeas.",
-            "O equipo celeste mantense entre os postos que dan acceso a Europa.",
-            "O Celta continúa na zona europea da táboa.",
+            "Segue instalado en posicións europeas.",
+            "Mantense entre os postos que dan acceso a Europa.",
+            "Continúa na zona europea da táboa.",
         ],
     },
     # Just below the European positions.
     "NEAR_EUROPEAN": {
         "WIN": [
-            "O Celta cada vez está máis preto de entrar en Europa!",
-            "Vitoria que achega aínda máis ao Celta á zona europea!",
-            "O sprint cara Europa colle forza tras esta vitoria!",
+            "Cada vez máis preto de Europa!",
+            "Achégase aínda máis á zona europea!",
+            "O sprint cara Europa colle forza!",
         ],
         "LOSS": [
-            "Esta derrota aleixa ao Celta das posicións europeas.",
-            "Oportunidade perdida para achegarse a Europa.",
-            "O soño europeo compícase un pouco máis tras esta derrota.",
+            "Esta derrota aleixa ao Celta de Europa.",
+            "Oportunidade perdida para achegarse á zona europea.",
+            "O soño europeo compícase un pouco máis.",
         ],
         "DRAW": [
-            "O Celta achégase ás posicións europeas.",
-            "O equipo celeste está a un paso de entrar en Europa.",
-            "O Celta ronda a zona europea da clasificación.",
+            "Achégase ás posicións europeas.",
+            "Está a un paso de entrar en Europa.",
+            "Ronda a zona europea da clasificación.",
         ],
     },
     # Comfortably clear of both zones.
     "MID_TABLE": {
         "WIN": [
-            "Vitoria que reforza unha posición cómoda na táboa!",
-            "O Celta suma e mira cara arriba na clasificación!",
+            "Vitoria que reforza unha posición cómoda!",
+            "Suma e mira cara arriba na táboa!",
             "Bo momento para un Celta instalado na zona media!",
         ],
         "LOSS": [
-            "O Celta segue na zona media, pero esta derrota non axuda.",
-            "Unha derrota que non compromete, pero tampouco axuda a medrar.",
-            "O equipo celeste estanca na zona media tras esta derrota.",
+            "Segue na zona media, pero esta derrota non axuda.",
+            "Non compromete, pero tampouco axuda a medrar.",
+            "Estanca na zona media tras esta derrota.",
         ],
         "DRAW": [
-            "O Celta segue instalado na zona media da táboa.",
-            "O equipo celeste mantense en terreo tranquilo na clasificación.",
-            "O Celta sitúase, por agora, lonxe tanto de Europa coma do descenso.",
+            "Segue instalado na zona media da táboa.",
+            "Mantense en terreo tranquilo na clasificación.",
+            "Lonxe, por agora, tanto de Europa coma do descenso.",
         ],
     },
     # Just above the relegation zone.
     "NEAR_RELEGATION": {
         "WIN": [
-            "Vitoria importante que afasta ao Celta da zona de descenso!",
-            "O Celta respira tras unha vitoria que sabe case a salvación!",
+            "Vitoria importante que afasta ao Celta do descenso!",
+            "Respira tras unha vitoria que sabe case a salvación!",
             "Tres puntos clave para escapar dos postos baixos!",
         ],
         "LOSS": [
-            "Esta derrota achega perigosamente ao Celta á zona de descenso.",
-            "As alarmas soan cada vez máis forte para o Celta.",
-            "Derrota que deixa ao Celta a un paso do descenso.",
+            "Esta derrota achégao perigosamente ao descenso.",
+            "As alarmas soan cada vez máis forte.",
+            "Queda a un paso do descenso tras esta derrota.",
         ],
         "DRAW": [
-            "O Celta achégase perigosamente á zona de descenso.",
-            "O equipo celeste ronda uns postos baixos que preocupan.",
-            "O Celta bota unha ollada cara atrás, preto do descenso.",
+            "Achégase perigosamente á zona de descenso.",
+            "Ronda uns postos baixos que preocupan.",
+            "Bota unha ollada cara atrás, preto do descenso.",
         ],
     },
     # Bottom LA_LIGA_RELEGATION_ZONE_SIZE.
     "RELEGATION": {
         "WIN": [
-            "Vitoria clave para comezar a saír da zona de descenso!",
-            "Un triunfo que devolve a esperanza na loita pola permanencia!",
-            "O Celta engánchase á loita pola permanencia tras esta vitoria!",
+            "Vitoria clave para saír do descenso!",
+            "Un triunfo que devolve a esperanza!",
+            "Engánchase á loita pola permanencia!",
         ],
         "LOSS": [
-            "O Celta afúndese aínda máis nos postos de descenso.",
-            "Malos números que agravan a situación na zona vermella.",
-            "A crise na loita polo descenso non deixa de medrar.",
+            "Afúndese aínda máis nos postos de descenso.",
+            "Malos números que agravan a situación.",
+            "A crise na loita polo descenso non para.",
         ],
         "DRAW": [
-            "O Celta segue instalado en posicións de descenso.",
-            "O equipo celeste continúa metido na zona vermella da táboa.",
-            "O Celta non sae dos postos de descenso.",
+            "Segue instalado en posicións de descenso.",
+            "Continúa metido na zona vermella da táboa.",
+            "Non sae dos postos de descenso.",
         ],
     },
 }

@@ -45,6 +45,11 @@ missing category, a typo'd key, a phrase that forgot its required opener.
 - Every phrase in a `LOSS_*` list starts with `"Mal, Celta, mal!"`.
 - No category's list is empty (an empty list makes `random.choice` crash
   the moment that category is hit).
+- Every phrase ends in `!` or `.` — no missing terminal punctuation, no
+  doubled-up `!!`/`..`. Phrases are written short and tweet-like now
+  (deliberately, see the STYLE note at the top of `phrases.py`), so don't
+  "fix" a phrase by padding it back out into a longer, more formal
+  sentence — that's a regression, not a correction.
 - No phrase mentions a specific competition (e.g. "Copa del Rey",
   "Champions League") — messages are deliberately competition-agnostic in
   their wording (an earlier `[competition]` prefix was tried and removed);
@@ -108,6 +113,8 @@ missing category, a typo'd key, a phrase that forgot its required opener.
        for p in phrase_list:
            if not p.startswith(expected_prefix):
                problems.append(f'{category} phrase missing \"{expected_prefix}\" prefix: {p!r}')
+           if not (p.endswith('!') or p.endswith('.')):
+               problems.append(f'{category} phrase missing terminal punctuation: {p!r}')
 
    expected_zones = {'EUROPEAN', 'NEAR_EUROPEAN', 'MID_TABLE', 'NEAR_RELEGATION', 'RELEGATION'}
    expected_tones = {'WIN', 'LOSS', 'DRAW'}
@@ -127,6 +134,9 @@ missing category, a typo'd key, a phrase that forgot its required opener.
        for tone, phrase_list in tones.items():
            if not phrase_list:
                problems.append(f'{zone}/{tone} (table-position) has zero phrases')
+           for p in phrase_list:
+               if not (p.endswith('!') or p.endswith('.')):
+                   problems.append(f'{zone}/{tone} phrase missing terminal punctuation: {p!r}')
 
    if problems:
        print('FAILED:')
