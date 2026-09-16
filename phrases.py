@@ -29,6 +29,17 @@
 # than this match's own shape, so they can override what would otherwise
 # be a WIN_STANDARD/LOSS_STANDARD result. See select_category()'s
 # docstring for exactly when each one wins out.
+#
+# WIN_ADVANCED_ROUND and LOSS_ELIMINATED can ALSO be chosen by
+# check_other_competitions_result() directly (via _check_two_legged_tie()
+# in main.py), overriding select_category()'s result entirely, when a
+# same-opponent rematch confirms this was the second leg of a two-legged
+# cup tie (Copa del Rey semifinal, Europa League knockout rounds) --
+# based on the real two-leg aggregate score, not just this leg's own
+# result. LOSS_ELIMINATED specifically is ONLY reachable this way (it has
+# no meaning outside a two-legged tie), so don't assume it's about a
+# "big"/lopsided single-match loss -- write its phrases around being
+# knocked out of the competition, not about this match's own scoreline.
 
 import random
 
@@ -215,6 +226,18 @@ LOSS_STREAK_3_PHRASES = [
     "Mal, Celta, mal! A crise de resultados continúa, van xa varias caídas.",
 ]
 
+# Eliminated on aggregate from a two-legged cup tie (Copa del Rey
+# semifinal, Europa League knockout rounds) -- see select_category() in
+# main.py. This is about the tie as a whole, not necessarily this leg's
+# own scoreline -- Celta could even have won this specific leg and still
+# be eliminated on aggregate.
+LOSS_ELIMINATED_PHRASES = [
+    "Mal, Celta, mal! O Celta queda eliminado na eliminatoria!",
+    "Mal, Celta, mal! Adeus á competición, a eliminatoria non deu para máis!",
+    "Mal, Celta, mal! O global da eliminatoria deixa fóra ao Celta!",
+    "Mal, Celta, mal! O soño remata aquí, eliminados na eliminatoria!",
+]
+
 # All phrase banks in one place, keyed by category. main.py's
 # classify_match() works out which key applies to a given match, and
 # get_random_phrase() below looks it up here.
@@ -240,6 +263,7 @@ PHRASES = {
     "LOSS_TEN_MEN": LOSS_TEN_MEN_PHRASES,
     "LOSS_STREAK_2": LOSS_STREAK_2_PHRASES,
     "LOSS_STREAK_3": LOSS_STREAK_3_PHRASES,
+    "LOSS_ELIMINATED": LOSS_ELIMINATED_PHRASES,
 }
 
 

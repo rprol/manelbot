@@ -47,50 +47,83 @@ Both checks funnel into `select_category()`, which wraps `classify_match()`
 (the *shape of this one match* — comeback/blowout/narrow/late/ten-men/
 standard for wins, rally/squandered/late/flat for draws,
 collapse/blowout/narrow/late/ten-men/standard for losses — 16 categories,
-unchanged) with two competition-level overrides, checked in this order:
+unchanged) with a cup-advancement default and a global win/loss streak:
 
-1. **Cup advancement** — in `COMPETITIONS_WHERE_WIN_MEANS_ADVANCING`
+1. **Cup advancement default** — in `COMPETITIONS_WHERE_WIN_MEANS_ADVANCING`
    (currently just `"Copa del Rey"`), any win becomes
    `WIN_ADVANCED_ROUND` regardless of the match's own shape. Spain's cup
-   has been strict single-match knockout (no two-legged ties, no
-   replays) since 2019-20, so a win there unambiguously means advancing.
-   **The Europa League is deliberately NOT included** — it mixes a
-   multi-matchday league phase (a single result doesn't decide anything
-   by itself) with mostly two-legged knockout rounds, and TheSportsDB's
-   free-tier data doesn't reliably distinguish these (confirmed live: the
-   Sept 2026 Omonia Nicosia match came back with `"intRound": "1"`, a
-   league-phase matchday number, not a knockout round). Guessing
-   "advanced" there risks posting something false, so it stays unhandled
-   — see `select_category()`'s docstring before changing this.
-2. **Win/loss streaks** — `_update_streak()` tracks a per-competition
-   win/loss streak in `state["streaks"][competition_key]` (a DRAW, or a
-   different outcome, resets it). `WIN_STREAK_2`/`WIN_STREAK_3` or
-   `LOSS_STREAK_2`/`LOSS_STREAK_3` (3 = "3 or more", generic enough to
-   stay accurate at any length) replace `WIN_STANDARD`/`LOSS_STANDARD`
-   **only** — a comeback/blowout/late/ten-men win or loss keeps its own
-   category even mid-streak, since that match's own story is more
-   specific than the streak trend. This never actually fires for Copa
-   del Rey (rule 1 always claims a win first, and a loss there ends the
-   run so no same-competition loss streak can exist).
+   is single-match knockout for every round **except the semifinal**,
+   which is two-legged — so this default is right most of the time, but
+   can't be trusted blindly for that one round; see `_check_two_legged_tie()`
+   below for how the *second* leg gets corrected. `UEFA Europa League` is
+   deliberately NOT in this set — its multi-matchday league phase means a
+   single win/loss there usually doesn't decide anything by itself, so
+   this default would be wrong more often than right there.
+2. **Win/loss streaks** — `_update_streak()` tracks ONE **global** streak
+   in `state["streak"]` (deliberately competition-agnostic — a La Liga
+   win followed by a Copa del Rey win is a 2-win streak, not two separate
+   1-win streaks; a DRAW, or a different outcome, resets it).
+   `WIN_STREAK_2`/`WIN_STREAK_3` or `LOSS_STREAK_2`/`LOSS_STREAK_3` (3 =
+   "3 or more", generic enough to stay accurate at any length) replace
+   `WIN_STANDARD`/`LOSS_STANDARD` **only** — a comeback/blowout/late/
+   ten-men win or loss keeps its own category even mid-streak, since that
+   match's own story is more specific than the streak trend.
 
-The final category picks a random Galician phrase from `phrases.py` (21
+Separately, `check_other_competitions_result()` calls
+`_check_two_legged_tie()` **after** `select_category()`, which can
+override its result entirely: it recognises a same-opponent rematch in
+the same competition within `TWO_LEGGED_TIE_WINDOW_DAYS` (15) as the
+second leg of a two-legged tie — Copa del Rey semifinal, or any Europa
+League/Conference League knockout round (all two-legged except the
+final) — and computes the *true aggregate* result across both legs,
+returning `WIN_ADVANCED_ROUND` or `LOSS_ELIMINATED` (a genuinely new
+category, only reachable this way — see phrases.py). This is a
+**structural** signal, not round-number-based: neither a round-robin
+league nor a "no repeated opponent" league phase can ever produce a
+same-opponent rematch that soon, so seeing one at all reliably means a
+knockout tie, regardless of what round number (if any) the data source
+reports. State for this lives in
+`state["last_opponent_by_competition"][competition_key]` (opponent id,
+date, both scores) — updated on *every* check #2 result, not just
+knockout ones, so whatever comes next always has something fresh to
+compare against. This only runs inside check #2 — never call it from
+check_la_liga_result(), where a same-opponent repeat is just a normal,
+unrelated league fixture, not a tie.
+
+The final category picks a random Galician phrase from `phrases.py` (22
 categories total now: the 16 above + `WIN_STREAK_2/3`, `LOSS_STREAK_2/3`,
-`WIN_ADVANCED_ROUND`), and posts `{phrase} {home} {score} {away} ({scorer
-note}). {star performer note}` (teams in real home/away order; scorer/star
-notes only when timeline data was available) to Telegram. **The message
-never names the competition** — no `[Copa del Rey]`-style prefix; that was
-tried and explicitly removed. `competition_key` is used purely internally
-for streak-tracking and the advancement check, never rendered. Each check
-then writes its own new id (and, for check #2, the event's date — see
-"known limitation" below) back to `state.json`, which the workflow commits
-back to the repo so state survives between runs.
+`WIN_ADVANCED_ROUND`, `LOSS_ELIMINATED`), and posts `{phrase} {home}
+{score} {away} ({scorer note}). {star performer note}` (teams in real
+home/away order; scorer/star notes only when timeline data was available)
+to Telegram. **The message never names the competition** — no `[Copa del
+Rey]`-style prefix; that was tried and explicitly removed. `competition_key`
+is used purely internally for the advancement default and the two-legged
+lookup, never rendered. Each check then writes its own new id (and, for
+check #2, the event's date — see "known limitation" below) back to
+`state.json`, which the workflow commits back to the repo so state
+survives between runs.
 
 **Known limitations:**
-- Extra-time/penalty-shootout results (Copa del Rey ties can go to
-  penalties) aren't specially handled — classification uses TheSportsDB's
-  regulation-time score (`intHomeScore`/`intAwayScore`) same as any other
-  match, since how a shootout is represented there on the free tier
-  hasn't been confirmed against a real example.
+- **A two-legged tie's *first* leg can't be identified in advance** —
+  there's nothing to compare against until the same opponent shows up
+  again, so a Copa del Rey semifinal's first leg can still get mis-tagged
+  `WIN_ADVANCED_ROUND` by the default above before we know the tie isn't
+  decided. Only the second leg is guaranteed correct (it silently
+  overrides whatever the first leg implied, using the real aggregate).
+  Don't try to "fix" this by guessing at round numbers instead — that's
+  exactly the unreliable approach this design replaced (see git history:
+  an earlier version tried gating on `intRound`, which turned out to mean
+  different things in different competitions/seasons and couldn't be
+  verified against the free-tier data available).
+- **No way to detect a cup final specifically** — winning one currently
+  still reads as "advances to the next round" rather than "wins the
+  trophy," for the same round-detection-reliability reason.
+- Extra-time/penalty-shootout results (an aggregate-level draw, not just
+  a single match) aren't specially handled — `_check_two_legged_tie()`
+  returns `None` (falls back to that leg's own normal category) rather
+  than guessing who went through on penalties, since how TheSportsDB
+  represents a shootout on the free tier hasn't been confirmed against a
+  real example.
 - `eventslast.php` is not reliably monotonic/up-to-date — confirmed live
   on 2026-09-16: hours after correctly showing a new Europa League result
   (Omonia Nicosia 1-0 Celta, which had to be posted manually because of
@@ -156,53 +189,64 @@ multi-competition support is deployed to an already-running bot).
   timeline()` (shared helper, also used by `fetch_thesportsdb_match_
   events()`) + `build_thesportsdb_match()` + `_derive_half_time_from_
   goals()` are check #2's TheSportsDB-only path. `select_category()`
-  layers cup-advancement/streak overrides on top of `classify_match()`
-  (see "How it works" above); `_update_streak()` is its per-competition
-  streak tracker. `_format_celta_scorers()` builds the scorer-name clause
-  (groups a brace/hat-trick under one player instead of repeating the
-  name); `_find_star_performer()` finds a standout player from
-  goal+assist counts. `FAKE_TEST_MATCHES` has one hand-built
+  layers the cup-advancement default/streak overrides on top of
+  `classify_match()`; `_update_streak()` is its global streak tracker;
+  `_check_two_legged_tie()` (called separately, only from check #2) does
+  the same-opponent-rematch aggregate-score override (see "How it works"
+  above for all of this). `_format_celta_scorers()` builds the
+  scorer-name clause (groups a brace/hat-trick under one player instead
+  of repeating the name); `_find_star_performer()` finds a standout
+  player from goal+assist counts. `FAKE_TEST_MATCHES` has one hand-built
   `{"match": ..., "goals": ..., "red_cards": ..., "category_override":
-  ...}` example per category (21 total). The base 16 rely on
+  ...}` example per category (22 total). The base 16 rely on
   `category_override` being absent/`None`, so `build_message()` derives
   the category from the match itself via `classify_match()` as normal;
-  the 5 new ones (`WIN_STREAK_2/3`, `LOSS_STREAK_2/3`,
-  `WIN_ADVANCED_ROUND`) can't be inferred from a single match in
-  isolation (they depend on streak/competition state test mode doesn't
-  have), so they set `category_override` explicitly instead. Supports
-  `python main.py --test-telegram`, which sends a message built from a
-  random fake match to every configured channel without touching
-  football-data.org, TheSportsDB, or `state.json` — used to smoke-test
-  Telegram credentials. Note: the test message is indistinguishable from a
-  real one (no "TEST" label).
-- `phrases.py` — Galician phrase banks, one list per category (21 total,
+  the 6 new ones (`WIN_STREAK_2/3`, `LOSS_STREAK_2/3`,
+  `WIN_ADVANCED_ROUND`, `LOSS_ELIMINATED`) can't be inferred from a
+  single match in isolation (they depend on streak/two-legged-tie state
+  test mode doesn't have), so they set `category_override` explicitly
+  instead. Supports `python main.py --test-telegram`, which sends a
+  message built from a random fake match to every configured channel
+  without touching football-data.org, TheSportsDB, or `state.json` —
+  used to smoke-test Telegram credentials. Note: the test message is
+  indistinguishable from a real one (no "TEST" label).
+- `phrases.py` — Galician phrase banks, one list per category (22 total,
   ~4 phrases each) keyed in the `PHRASES` dict by category name (e.g.
   `"WIN_COMEBACK"`, `"LOSS_BLOWOUT"`, `"WIN_LATE"`, `"WIN_TEN_MEN"`,
-  `"WIN_STREAK_2"`, `"WIN_ADVANCED_ROUND"`). Every phrase in a `WIN_*`
-  category starts with "Ben, Celta, ben!", every `DRAW_*` with "Regular,
-  Celta, regular!", every `LOSS_*` with "Mal, Celta, mal!" — this
-  fixed-opener rule is an explicit requirement, preserve it if editing
-  further. Also avoid stadium-specific wording (e.g. "Balaídos") since
-  away matches are half the fixtures — this was already caught and fixed
-  once. **The message never names the competition** (no `[Copa del
-  Rey]`-style prefix) — that was tried and explicitly removed; don't
-  reintroduce it. **Only the original WIN phrase ("Ben, Celta, ben!
-  Partido gañado con mérito!") came from the user — the rest, including
-  all 5 new streak/advancement categories, were AI-drafted and explicitly
-  have not been reviewed by a native Galician speaker.** Don't assume
-  their wording/tone is correct; flag this if asked to touch them.
-- `state.json` — three fields: `last_processed_match_id` (football-data.org,
-  check #1); `last_processed_thesportsdb_event_id` +
+  `"WIN_STREAK_2"`, `"WIN_ADVANCED_ROUND"`, `"LOSS_ELIMINATED"`). Every
+  phrase in a `WIN_*` category starts with "Ben, Celta, ben!", every
+  `DRAW_*` with "Regular, Celta, regular!", every `LOSS_*` with "Mal,
+  Celta, mal!" — this fixed-opener rule is an explicit requirement,
+  preserve it if editing further. Also avoid stadium-specific wording
+  (e.g. "Balaídos") since away matches are half the fixtures — this was
+  already caught and fixed once. **The message never names the
+  competition** (no `[Copa del Rey]`-style prefix) — that was tried and
+  explicitly removed; don't reintroduce it. `LOSS_ELIMINATED` specifically
+  is about being knocked out of a two-legged tie on aggregate, not about
+  this match's own scoreline (Celta can even win the match and still be
+  `LOSS_ELIMINATED`) — write/edit its phrases with that in mind. **Only
+  the original WIN phrase ("Ben, Celta, ben! Partido gañado con
+  mérito!") came from the user — the rest, including all 6 new
+  streak/advancement/elimination categories, were AI-drafted and
+  explicitly have not been reviewed by a native Galician speaker.** Don't
+  assume their wording/tone is correct; flag this if asked to touch them.
+- `state.json` — five fields: `last_processed_match_id`
+  (football-data.org, check #1); `last_processed_thesportsdb_event_id` +
   `last_processed_thesportsdb_event_date` (TheSportsDB, check #2 — the
   date exists specifically to guard against `eventslast.php`'s
   non-monotonic responses, see "known limitations" above, don't drop it);
-  and `streaks` (a dict keyed by competition name, e.g. `{"La Liga":
-  {"outcome": "WIN", "count": 2}}` — see `_update_streak()`). Committed
-  back to the repo by the workflow after each run (`github-actions[bot]`
-  identity). All of this lives in *one* shared `state` dict that both
-  checks mutate and pass to `save_state(state)` — never construct a fresh
-  dict to save just one field, or you'll silently wipe out the other
-  check's keys (or the streaks).
+  `streak` (ONE global object, e.g. `{"outcome": "WIN", "count": 2}` —
+  see `_update_streak()`, deliberately not split per competition); and
+  `last_opponent_by_competition` (a dict keyed by competition name, e.g.
+  `{"Copa del Rey": {"opponent_id": 123, "date": "2027-03-04",
+  "celta_score": 0, "opponent_score": 1}}` — see
+  `_check_two_legged_tie()`, only ever written/read by check #2).
+  Committed back to the repo by the workflow after each run
+  (`github-actions[bot]` identity). All of this lives in *one* shared
+  `state` dict that both checks mutate and pass to `save_state(state)` —
+  never construct a fresh dict to save just one field, or you'll silently
+  wipe out the other check's keys (or the streak, or the opponent
+  history).
 - `.github/workflows/check_result.yml` — cron `*/20 * * * *`, plus a manual
   `workflow_dispatch` with a `test_mode` boolean input that runs
   `--test-telegram` instead of a real check.
@@ -257,11 +301,14 @@ multi-competition support is deployed to an already-running bot).
   channels don't get double-posted) — the failing channel just misses that
   one result until fixed.
 - `select_category()` always calls `_update_streak()` (mutating
-  `state["streaks"]`) even when a total-send-failure means `state` never
-  actually gets saved this run — that's intentional: it keeps the whole
-  "this match's effect on state" atomic with whether it was actually
-  posted, so a failed send gets its streak effect recomputed correctly
-  on retry instead of double-counting.
+  `state["streak"]`), and `check_other_competitions_result()` always
+  calls `_check_two_legged_tie()` (mutating
+  `state["last_opponent_by_competition"]`) — both even when a
+  total-send-failure means `state` never actually gets saved this run.
+  That's intentional: it keeps the whole "this match's effect on state"
+  atomic with whether it was actually posted, so a failed send gets its
+  streak/opponent-history effect recomputed correctly on retry instead of
+  double-counting or missing a leg.
 - The user is a Python beginner — keep comments and explanations in the code
   itself, not just in commit messages/PR descriptions.
 - Ask before guessing on anything ambiguous (exact channel name, team id,

@@ -112,41 +112,68 @@ From the next new result onwards, it posts normally.
 
 ## Streaks and cup advancement
 
-On top of each match's own shape, `select_category()` in `main.py` adds
-two more layers of context, each tracked **separately per competition**
-(a La Liga streak and a Champions League streak, for example, never mix):
+On top of each match's own shape, `main.py` adds two more layers of
+context:
 
-- **Win/loss streaks:** two or more wins (or losses) in a row in the same
-  competition get a streak-aware phrase instead of a bland "standard"
-  one, e.g.:
+- **Win/loss streaks** (`select_category()`): two or more wins (or
+  losses) **in a row, across any competition** get a streak-aware phrase
+  instead of a bland "standard" one, e.g.:
 
   > Ben, Celta, ben! Terceira vitoria consecutiva, o Celta está en racha! Celta 1-0 Getafe
 
-  This only replaces the *standard* win/loss category -- a comeback,
+  This is deliberately **not** split per competition -- a La Liga win
+  followed by a Copa del Rey win counts as a 2-win streak, not two
+  separate 1-win streaks, since from a fan's perspective "the team is on
+  a run of good form" doesn't care which competition each result came
+  from. It only replaces the *standard* win/loss category -- a comeback,
   blowout, late winner, or ten-men result keeps its own more specific
   phrase even if it's also the 3rd win in a row, since that match's own
   story is more specific than the streak. A draw (or the opposite result)
   resets the streak back to zero.
-- **Cup advancement:** a **Copa del Rey** win always gets an
-  advancement-themed phrase instead, e.g.:
+
+- **Cup advancement/elimination** (`_check_two_legged_tie()` +
+  `select_category()`): Spain's Copa del Rey is single-match knockout for
+  every round **except the semifinal, which is two-legged** -- so a Copa
+  del Rey win *usually* means advancing, and gets that phrase by default:
 
   > Ben, Celta, ben! O Celta avanza á seguinte rolda da copa! Celta 1-0 Ponferradina
 
-  This is reliable specifically because Spain's cup has been strict
-  single-match knockout (no two-legged ties, no replays) since the
-  2019-20 format change -- a win there always means advancing, full stop,
-  so it takes priority over every other category for that competition.
+  But for a genuine two-legged tie (that Copa del Rey semifinal, or any
+  Europa League/Conference League knockout round -- the Europa League's
+  knockout rounds, unlike its multi-matchday league phase, are two-legged
+  too, except the final), a single win doesn't actually decide anything
+  by itself -- what matters is the **aggregate score across both legs**.
+  The bot detects this by recognising a same-opponent rematch in the same
+  competition within about two weeks -- structurally, that can only
+  happen in a two-legged tie, since neither a round-robin league nor a
+  "no repeated opponent" league phase can ever produce one, regardless of
+  what round number the data source reports (which isn't reliable to
+  read anyway -- see below). When it finds one, it adds up both legs'
+  scores and posts the *real* outcome instead:
 
-  **The Europa League deliberately does NOT get this treatment.** Its
-  format mixes a multi-matchday league phase (a single result doesn't
-  decide anything by itself) with mostly two-legged knockout rounds (a
-  single-leg win doesn't guarantee winning the tie), and TheSportsDB's
-  free-tier data doesn't reliably tell us which phase/leg a given match
-  was -- confirmed live: a real September 2026 Europa League match came
-  back tagged `"intRound": "1"`, which turned out to be a league-phase
-  matchday number, not a knockout round. Guessing "advanced" from a
-  single win risks posting something false, so this stays unhandled
-  until there's a reliable way to tell the phase/leg apart.
+  > Ben, Celta, ben! O soño copeiro continúa, á seguinte rolda! Celta 2-0 Ponferradina
+  >
+  > (after having lost the first leg 0-1 away -- aggregate 2-1, genuinely through)
+
+  > Mal, Celta, mal! O Celta queda eliminado na eliminatoria! Celta 1-0 Villarreal
+  >
+  > (a win on the night, but eliminated on aggregate -- LOSS_ELIMINATED, only ever reachable this way)
+
+  **Known limitations:**
+  - There's no way to identify **a two-legged tie's *first* leg** in
+    advance -- we only find out it was two-legged once the same opponent
+    shows up again. So a Copa del Rey semifinal's first leg can still get
+    mis-tagged as "advanced" by the default-on-any-win rule above; only
+    the second leg is guaranteed correct (and will silently correct
+    itself using the real aggregate once it's detected).
+  - If the aggregate itself is level, real football would settle that
+    with extra time and/or penalties, which the bot has no data for -- it
+    just falls back to that leg's own normal category rather than
+    guessing who actually went through.
+  - There's no way to specifically identify **a cup final** either (Copa
+    del Rey or Europa League) -- winning one would currently still read
+    as "advances to the next round" rather than "wins the trophy", since
+    detecting that reliably has the same data limitations as above.
 
 ## Scorer names, standout players, and match drama
 
@@ -396,9 +423,9 @@ real using live data.
 | File | Purpose |
 |---|---|
 | `main.py` | The core script: two independent checks (La Liga/Champions League via football-data.org, everything else via TheSportsDB), each fetching match data, classifying the result into a category, posting to Telegram, and updating its own state. |
-| `phrases.py` | Galician phrase banks, one per category (21 total) -- edit freely. |
+| `phrases.py` | Galician phrase banks, one per category (22 total) -- edit freely. |
 | `requirements.txt` | Python dependencies (just `requests`). |
-| `state.json` | Tracks the last match/event id each check posted (plus per-competition win/loss streaks), so results aren't duplicated. |
+| `state.json` | Tracks the last match/event id each check posted, the global win/loss streak, and the last opponent per competition (for two-legged tie detection), so results aren't duplicated. |
 | `.env.example` | Template showing which environment variables are needed for local testing. |
 | `.github/workflows/check_result.yml` | The scheduled GitHub Actions workflow. |
 

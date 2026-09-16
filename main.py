@@ -31,6 +31,7 @@ JSON file) is all we use to remember what's already been posted, and the
 GitHub Actions workflow commits it back to the repo after each run.
 """
 
+import datetime
 import json
 import os
 import random
@@ -60,8 +61,9 @@ COMPETITION_CODES = "PD,CL"
 
 # Human-readable competition names, keyed by football-data.org's code --
 # used as the `competition_key` passed to select_category() (see below),
-# so La Liga and Champions League results track their win/loss streaks
-# separately.
+# which identifies the competition for the cup-advancement check (win/loss
+# streaks themselves are tracked globally across every competition, not
+# per one -- see _update_streak()).
 COMPETITION_NAMES_BY_CODE = {
     "PD": "La Liga",
     "CL": "UEFA Champions League",
@@ -612,80 +614,161 @@ def classify_match(match, team_id, goals=None, red_cards=None):
     return "DRAW_FLAT"
 
 
-# Competitions where a single win always means advancing to the next round,
-# so select_category() can confidently override to WIN_ADVANCED_ROUND.
-# Spain's Copa del Rey has been straight single-match knockout (no
-# two-legged ties, no replays) since the 2019-20 format change, so a win
-# there unambiguously means advancing. The Europa League is NOT included --
-# it mixes a multi-matchday league phase (a single win/loss there doesn't
-# decide anything by itself) with mostly two-legged knockout rounds (a
-# single-leg win doesn't guarantee the aggregate tie), and TheSportsDB's
-# free-tier event data doesn't reliably tell us which phase/leg a given
-# match was -- confirmed live: the Sept 2026 Omonia Nicosia match came back
-# with "intRound": "1", which is a league-phase matchday number here, not a
-# knockout round. Guessing "advanced" anyway risks posting something
-# false, so this stays unhandled until there's a reliable way to tell.
+# Competitions where a single win DEFAULTS to meaning advancing to the next
+# round, so select_category() can confidently override to
+# WIN_ADVANCED_ROUND without needing to check for a two-legged tie first.
+# Spain's Copa del Rey is single-match knockout for every round EXCEPT the
+# semifinal, which is two-legged -- so this default is right most of the
+# time, but wrong for a semifinal's first leg specifically. There's no
+# reliable way to tell "this win is the semifinal first leg" *in advance*
+# (TheSportsDB's free-tier round numbers for this competition aren't
+# confirmed to correspond to a fixed "semifinal = round N" scheme), so that
+# one leg can still be mis-tagged as advancing when it isn't decided yet.
+# What IS reliably fixable is the *second* leg: see
+# _check_two_legged_tie(), which recognises a same-opponent rematch
+# (structurally impossible in a single round-robin/league-phase
+# competition, so it's a solid signal regardless of round numbering) and
+# corrects the category to the real aggregate result -- overriding
+# whatever this default (or a normal WIN/LOSS category) said. The Europa
+# League is NOT in this set -- its multi-matchday league phase means a
+# single win/loss there usually doesn't decide anything by itself, so
+# defaulting to "advanced" would be wrong far more often than right; EL
+# only ever gets WIN_ADVANCED_ROUND/LOSS_ELIMINATED via a confirmed
+# two-legged rematch (i.e. the actual knockout stage), never as a default.
 COMPETITIONS_WHERE_WIN_MEANS_ADVANCING = {"Copa del Rey"}
 
+# How many days apart two matches against the same opponent, in the same
+# competition, can be and still count as the two legs of one tie (see
+# _check_two_legged_tie()). UEFA/RFEF schedule two-legged ties about a
+# week apart in practice; this is deliberately generous to allow for
+# rescheduling.
+TWO_LEGGED_TIE_WINDOW_DAYS = 15
 
-def _update_streak(state, competition_key, outcome):
+
+def _update_streak(state, outcome):
     """
-    Update state["streaks"][competition_key] with this new result and
-    return the resulting streak length for `outcome`.
+    Update state["streak"] with this new result and return the resulting
+    streak length for `outcome`.
 
-    Only WIN and LOSS chains are tracked -- a DRAW (or a different
-    outcome than whatever streak was running) resets the streak back to
-    1 for the new outcome, or clears it out on a draw. Mutates `state` in
-    place; callers are responsible for calling save_state() afterwards
-    (same shared-state convention as check_la_liga_result()/
-    check_other_competitions_result() use for their own match/event id
-    keys -- see CLAUDE.md).
+    Deliberately competition-agnostic: a single global streak, not one per
+    competition -- a La Liga win followed by a Copa del Rey win is a
+    2-win streak, not two separate 1-win streaks. Only WIN and LOSS chains
+    are tracked -- a DRAW (or a different outcome than whatever streak was
+    running) resets the streak back to 1 for the new outcome, or clears it
+    out on a draw. Mutates `state` in place; callers are responsible for
+    calling save_state() afterwards (same shared-state convention as
+    check_la_liga_result()/check_other_competitions_result() use for their
+    own match/event id keys -- see CLAUDE.md).
 
     Returns the new streak length (always 1 right after a DRAW, or after
     a WIN following a LOSS and vice versa) -- callers only act on this
     when `outcome` is WIN or LOSS and the returned count is >= 2.
     """
-    streaks = state.setdefault("streaks", {})
-    current = streaks.get(competition_key)
+    current = state.get("streak")
 
     if current and current.get("outcome") == outcome:
         new_count = current["count"] + 1
     else:
         new_count = 1
 
-    streaks[competition_key] = {"outcome": outcome, "count": new_count}
+    state["streak"] = {"outcome": outcome, "count": new_count}
     return new_count
+
+
+def _check_two_legged_tie(state, competition_key, opponent_id, event_date, celta_ft, opponent_ft):
+    """
+    Detect whether this result is the second leg of a two-legged tie
+    against the same opponent in the same competition (Copa del Rey
+    semifinals, Europa League knockout rounds -- both two-legged; see
+    COMPETITIONS_WHERE_WIN_MEANS_ADVANCING's docstring for why we can't
+    just detect this by round number instead), and if so, work out who
+    really advanced on aggregate.
+
+    The signal is structural, not round-number-based: `state` remembers
+    the most recent opponent/date/score for each competition_key
+    (`state["last_opponent_by_competition"]`), and neither a round-robin
+    league nor a "no repeated opponent" league phase can ever produce a
+    same-opponent rematch within TWO_LEGGED_TIE_WINDOW_DAYS -- so seeing
+    one at all means this must be leg two of a knockout tie, regardless of
+    what round number TheSportsDB reports (or doesn't).
+
+    Always updates state["last_opponent_by_competition"][competition_key]
+    to this match's own opponent/date/score before returning, so the
+    *next* result in this competition has this one to compare against --
+    callers must save `state` afterwards same as _update_streak().
+
+    Returns "WIN_ADVANCED_ROUND" or "LOSS_ELIMINATED" if a same-opponent
+    rematch was found AND the two legs' aggregate score has a clear
+    winner. Returns None otherwise -- including when this is leg one of a
+    tie (nothing to compare against yet, so leg one can still be
+    mis-tagged by the COMPETITIONS_WHERE_WIN_MEANS_ADVANCING default, if
+    it applies -- see its docstring), and when the aggregate itself is
+    level (real football would settle that with extra time/penalties,
+    which we have no data for -- see the extra-time/penalty known
+    limitation in README.md/CLAUDE.md).
+    """
+    history = state.setdefault("last_opponent_by_competition", {})
+    previous = history.get(competition_key)
+
+    result = None
+    if previous and previous.get("opponent_id") == opponent_id:
+        try:
+            days_apart = (
+                datetime.date.fromisoformat(event_date)
+                - datetime.date.fromisoformat(previous["date"])
+            ).days
+        except (ValueError, TypeError, KeyError):
+            days_apart = None
+
+        if days_apart is not None and 0 <= days_apart <= TWO_LEGGED_TIE_WINDOW_DAYS:
+            aggregate_celta = previous["celta_score"] + celta_ft
+            aggregate_opponent = previous["opponent_score"] + opponent_ft
+            if aggregate_celta > aggregate_opponent:
+                result = "WIN_ADVANCED_ROUND"
+            elif aggregate_celta < aggregate_opponent:
+                result = "LOSS_ELIMINATED"
+            # else: level on aggregate -- decided by ET/penalties in real
+            # life, which we can't determine; leave `result` as None.
+
+    history[competition_key] = {
+        "opponent_id": opponent_id,
+        "date": event_date,
+        "celta_score": celta_ft,
+        "opponent_score": opponent_ft,
+    }
+    return result
 
 
 def select_category(match, team_id, goals, red_cards, competition_key, state):
     """
     Decide which phrases.py category this result should actually use.
     Wraps classify_match() (the *shape of this one match* -- comeback,
-    blowout, late, ten-men, etc.) with two competition-level overrides,
+    blowout, late, ten-men, etc.) with competition-level overrides,
     checked in this order:
 
-      1. Cup advancement: in a competition from
+      1. Cup advancement default: in a competition from
          COMPETITIONS_WHERE_WIN_MEANS_ADVANCING (currently just Copa del
          Rey), a win always becomes WIN_ADVANCED_ROUND -- advancing (or
          not) is bigger news than whether this particular win was a
-         comeback or a blowout, and it's true every single time, so it
-         takes over regardless of the match's own shape.
+         comeback or a blowout, and it's true for almost every round, so
+         it takes over regardless of the match's own shape. (Callers
+         still apply _check_two_legged_tie() separately afterwards, which
+         can correct this for a two-legged tie's second leg -- see that
+         function's docstring.)
       2. Win/loss streaks: WIN_STREAK_2/3 or LOSS_STREAK_2/3 replace
          WIN_STANDARD/LOSS_STANDARD specifically -- i.e. only when
          classify_match() found no more specific story of its own (not a
          comeback, blowout, ten-men, or late-drama result). A comeback
          win that also happens to be the 3rd in a row still reads as
          WIN_COMEBACK; a bog-standard 1-0 win that's the 3rd in a row
-         reads as WIN_STREAK_3 instead of the blander WIN_STANDARD.
-         (This never actually fires for Copa del Rey wins in practice,
-         since rule 1 above already claims every one of those -- and a
-         Copa del Rey LOSS ends the run in that competition, so there's
-         never a same-competition loss streak to track there either.)
+         reads as WIN_STREAK_3 instead of the blander WIN_STANDARD. The
+         streak itself is tracked globally across every competition (see
+         _update_streak()), not per competition.
 
-    `competition_key` identifies the competition for streak-tracking
-    purposes (e.g. "La Liga", "UEFA Champions League", "Copa del Rey",
-    whatever TheSportsDB calls it) -- see COMPETITION_NAMES_BY_CODE for
-    check_la_liga_result()'s case and `strLeague` for check_other_
+    `competition_key` identifies the competition for the advancement
+    default above (e.g. "La Liga", "UEFA Champions League", "Copa del
+    Rey", whatever TheSportsDB calls it) -- see COMPETITION_NAMES_BY_CODE
+    for check_la_liga_result()'s case and `strLeague` for check_other_
     competitions_result()'s.
 
     Always calls _update_streak() (mutating `state` in place) even when
@@ -697,7 +780,7 @@ def select_category(match, team_id, goals, red_cards, competition_key, state):
 
     celta_ft, opponent_ft = _celta_full_time_score(match, team_id)
     outcome = _match_outcome(celta_ft - opponent_ft)
-    streak_count = _update_streak(state, competition_key, outcome)
+    streak_count = _update_streak(state, outcome)
 
     if outcome == "WIN" and competition_key in COMPETITIONS_WHERE_WIN_MEANS_ADVANCING:
         return "WIN_ADVANCED_ROUND"
@@ -1191,6 +1274,23 @@ FAKE_TEST_MATCHES = [
         "red_cards": None,
         "category_override": "LOSS_STREAK_3",
     },
+    {  # LOSS_ELIMINATED: only ever reachable via _check_two_legged_tie()'s
+       # aggregate-score comparison across two legs, never from a single
+       # match in isolation -- forced here via category_override since
+       # test mode has no second leg to compare against.
+        "match": {
+            "homeTeam": {"id": 558, "name": "RC Celta de Vigo"},
+            "awayTeam": {"id": 622, "name": "Sevilla FC"},
+            "score": {
+                "winner": "HOME_TEAM",
+                "fullTime": {"home": 1, "away": 0},
+                "halfTime": {"home": 0, "away": 0},
+            },
+        },
+        "goals": None,
+        "red_cards": None,
+        "category_override": "LOSS_ELIMINATED",
+    },
 ]
 
 
@@ -1363,7 +1463,10 @@ def check_other_competitions_result(
     state.json without clobbering each other. The date is stored
     alongside the id so a stale/out-of-order response from
     eventslast.php can't regress state backwards -- see the date check
-    below.
+    below. Also mutates `state["last_opponent_by_competition"]` via
+    _check_two_legged_tie(), used to detect and correctly score a
+    two-legged cup tie's second leg (Copa del Rey semifinal, Europa
+    League knockout rounds) -- see that function's docstring.
 
     Returns True only if a genuinely new, postable result failed to reach
     every Telegram channel (so main() can still exit non-zero), False
@@ -1441,6 +1544,28 @@ def check_other_competitions_result(
 
     synthetic_match = build_thesportsdb_match(latest_event, thesportsdb_team_id, goals)
     category = select_category(synthetic_match, thesportsdb_team_id, goals, red_cards, competition_key, state)
+
+    # Check separately whether this is actually the second leg of a
+    # two-legged tie (Copa del Rey semifinal, Europa League knockout
+    # rounds) against the same opponent as last time in this competition
+    # -- if so, override whatever category was picked above with the real
+    # aggregate result. This only makes sense within this TheSportsDB-only
+    # path (La Liga/Champions League are round-robin/league-phase, where a
+    # same-opponent repeat is a normal, unrelated standalone fixture, not
+    # a tie) -- never call this from check_la_liga_result().
+    celta_ft, opponent_ft = _celta_full_time_score(synthetic_match, thesportsdb_team_id)
+    home_id = synthetic_match["homeTeam"]["id"]
+    opponent_id = synthetic_match["awayTeam"]["id"] if home_id == int(thesportsdb_team_id) else home_id
+    two_legged_category = _check_two_legged_tie(
+        state, competition_key, opponent_id, event_date, celta_ft, opponent_ft
+    )
+    if two_legged_category:
+        print(
+            f"Detected second leg of a two-legged tie (same opponent as last "
+            f"{competition_key} result) -- aggregate result: {two_legged_category}."
+        )
+        category = two_legged_category
+
     message = build_message(synthetic_match, thesportsdb_team_id, goals, red_cards, category)
     print(f"Posting new result: {message}")
 

@@ -13,7 +13,7 @@ missing category, a typo'd key, a phrase that forgot its required opener.
 
 ## What must hold
 
-- `phrases.PHRASES` has exactly these 21 keys:
+- `phrases.PHRASES` has exactly these 22 keys:
   - The 16 `classify_match()` can return directly: `WIN_COMEBACK`,
     `WIN_BLOWOUT`, `WIN_NARROW`, `WIN_STANDARD`, `WIN_LATE`, `WIN_TEN_MEN`,
     `DRAW_RALLY`, `DRAW_SQUANDERED`, `DRAW_FLAT`, `DRAW_LATE`,
@@ -23,14 +23,22 @@ missing category, a typo'd key, a phrase that forgot its required opener.
     `fetch_thesportsdb_match_events()`) — a match with no such data, or
     with a `goals` list whose counts don't add up to the real score
     (TheSportsDB's data can be incomplete), never produces one.
-  - 5 more `select_category()` can additionally return, layered on top of
+  - 4 more `select_category()` can additionally return, layered on top of
     (and sometimes overriding) `classify_match()`'s result: `WIN_STREAK_2`,
     `WIN_STREAK_3`, `LOSS_STREAK_2`, `LOSS_STREAK_3` (2+/3+ wins or losses
-    in a row in the same competition, tracked in `state["streaks"]` —
-    only reachable when the base category would otherwise have been
-    `WIN_STANDARD`/`LOSS_STANDARD`), and `WIN_ADVANCED_ROUND` (a Copa del
-    Rey win — see `COMPETITIONS_WHERE_WIN_MEANS_ADVANCING`).
-  - Any category not in this set of 21 is either a typo or dead code —
+    in a row, tracked GLOBALLY across every competition in
+    `state["streak"]` — only reachable when the base category would
+    otherwise have been `WIN_STANDARD`/`LOSS_STANDARD`), and
+    `WIN_ADVANCED_ROUND` (defaults to any Copa del Rey win — see
+    `COMPETITIONS_WHERE_WIN_MEANS_ADVANCING`).
+  - 2 more only `check_other_competitions_result()` can return, via
+    `_check_two_legged_tie()`, which can override *any* of the above
+    entirely: `WIN_ADVANCED_ROUND` again (confirmed by real two-leg
+    aggregate this time, not just the default) and `LOSS_ELIMINATED`
+    (aggregate loss of a two-legged tie — this one has NO other path to
+    it, so if it's ever unreachable in a review of `main.py`, that's a
+    real bug, not just an unused category).
+  - Any category not in this set of 22 is either a typo or dead code —
     either way, worth flagging.
 - Every phrase in a `WIN_*` list starts with `"Ben, Celta, ben!"`.
 - Every phrase in a `DRAW_*` list starts with `"Regular, Celta, regular!"`.
@@ -56,7 +64,7 @@ missing category, a typo'd key, a phrase that forgot its required opener.
        'WIN_STREAK_2', 'WIN_STREAK_3', 'WIN_ADVANCED_ROUND',
        'DRAW_RALLY', 'DRAW_SQUANDERED', 'DRAW_FLAT', 'DRAW_LATE',
        'LOSS_COLLAPSE', 'LOSS_BLOWOUT', 'LOSS_NARROW', 'LOSS_STANDARD', 'LOSS_LATE', 'LOSS_TEN_MEN',
-       'LOSS_STREAK_2', 'LOSS_STREAK_3',
+       'LOSS_STREAK_2', 'LOSS_STREAK_3', 'LOSS_ELIMINATED',
    }
    prefixes = {
        'WIN': 'Ben, Celta, ben!',
