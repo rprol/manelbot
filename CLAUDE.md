@@ -321,11 +321,24 @@ multi-competition support is deployed to an already-running bot).
 - `THESPORTSDB_TEAM_ID` / `THESPORTSDB_API_KEY` — both optional, not
   secrets, with working free defaults (`DEFAULT_THESPORTSDB_TEAM_ID =
   "133937"`, confirmed against the live API; `DEFAULT_THESPORTSDB_API_KEY =
-  "3"`, TheSportsDB's public free test key). No signup needed. **No longer
-  purely optional in effect** — `check_other_competitions_result()` (Copa
-  del Rey, Europa League, ...) depends entirely on TheSportsDB; only the
-  *enrichment* role on top of check #1's La Liga/Champions League results
-  is optional/fails-safe.
+  "123"`, TheSportsDB's public free test key). No signup needed. **No
+  longer purely optional in effect** — `check_other_competitions_result()`
+  (Copa del Rey, Europa League, ...) depends entirely on TheSportsDB; only
+  the *enrichment* role on top of check #1's La Liga/Champions League
+  results is optional/fails-safe.
+  **Incident (2026-11-01):** TheSportsDB permanently disabled their
+  original test key `"3"` at some point after 2026-09-19. Because
+  TheSportsDB failures are designed to fail safely (log a `WARNING`,
+  return `None`/nothing, never crash — see "Things to know" below), this
+  broke `check_other_competitions_result()` silently for over a month:
+  every scheduled run "succeeded" and logged a `WARNING: ... 403 ...`,
+  but nobody noticed because nothing looked broken from the outside.
+  Confirmed via `gh run view --log` on real workflow runs, then verified
+  directly with `curl` (the 403 body names the replacement key: `"123"`).
+  If TheSportsDB enrichment/coverage silently stops working again, check
+  for a similar key rotation before assuming it's a code bug — this
+  fail-safe design means a dead key produces warnings, not errors, so it
+  won't surface on its own.
 
 ## Things to know before making changes
 

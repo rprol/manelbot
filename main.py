@@ -117,12 +117,16 @@ REQUEST_TIMEOUT = 15
 # football-data.org reported (same date, same score).
 DEFAULT_THESPORTSDB_TEAM_ID = "133937"
 
-# "3" is TheSportsDB's public free test key, usable with no registration --
-# per their own docs, this is the normal way to use the v1 API for free/
-# hobby projects. It's shared across everyone using it, so if reliability
-# ever becomes an issue, register for a personal key at
+# "123" is TheSportsDB's public free test key, usable with no registration.
+# NOTE: the key used to be "3" -- TheSportsDB permanently disabled it at
+# some point (confirmed live: it now returns 403 "The old '3' Free Sports
+# API key is permanently disabled... use the new test key '123'"). This
+# broke check_other_competitions_result() silently for over a month (every
+# run logged a WARNING and found nothing, but never crashed) before being
+# caught. It's shared across everyone using it, so if reliability ever
+# becomes an issue again, register for a personal key at
 # https://www.thesportsdb.com/free_sports_api and set THESPORTSDB_API_KEY.
-DEFAULT_THESPORTSDB_API_KEY = "3"
+DEFAULT_THESPORTSDB_API_KEY = "123"
 
 # TheSportsDB's own numeric league ids for La Liga and the Champions League
 # (confirmed live: GET /search_all_leagues.php?c=Spain and

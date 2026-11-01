@@ -269,13 +269,22 @@ message with no extra detail. Nothing about the core flow depends on this
 working.
 
 No signup is required: `THESPORTSDB_TEAM_ID` (Celta's id, `133937`, already
-verified against the live API) and `THESPORTSDB_API_KEY` (`3`, TheSportsDB's
-public free test key -- per their own docs, this is the normal way to use
-their v1 API for free/hobby projects) both have working defaults baked into
-`main.py`. You don't need to set either one to get this working. If you
-ever want a dedicated (non-shared) key, register for free at
+verified against the live API) and `THESPORTSDB_API_KEY` (`123`,
+TheSportsDB's public free test key -- per their own docs, this is the
+normal way to use their v1 API for free/hobby projects) both have working
+defaults baked into `main.py`. You don't need to set either one to get
+this working. If you ever want a dedicated (non-shared) key, register for
+free at
 [thesportsdb.com/free_sports_api](https://www.thesportsdb.com/free_sports_api)
 and set `THESPORTSDB_API_KEY` to override the default.
+
+> **Note:** this key is a shared public test key, and TheSportsDB has
+> changed it before without notice (the original key, `3`, was
+> permanently disabled at some point and replaced with `123` -- this bot
+> hit that exact issue, silently, for about a month before it was
+> caught). If TheSportsDB enrichment/coverage for non-La-Liga competitions
+> stops working again, check whether the key has rotated again before
+> assuming something else is wrong.
 
 ## Setup guide
 
