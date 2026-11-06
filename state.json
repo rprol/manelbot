@@ -1,9 +1,17 @@
 {
   "last_processed_match_id": 564735,
-  "last_processed_thesportsdb_event_id": "2506264",
-  "last_processed_thesportsdb_event_date": "2026-10-25",
+  "last_processed_thesportsdb_event_id": "2594879",
+  "last_processed_thesportsdb_event_date": "2026-11-05",
   "streak": {
     "outcome": "LOSS",
-    "count": 1
+    "count": 2
+  },
+  "last_opponent_by_competition": {
+    "UEFA Europa League": {
+      "opponent_id": 138141,
+      "date": "2026-11-05",
+      "celta_score": 1,
+      "opponent_score": 2
+    }
   }
 }
